@@ -112,3 +112,13 @@ func dbWritePrivateKey(privkey []byte, hash string) {
 		log.Fatal(err)
 	}
 }
+
+func dbGetBlockchainHeight() int {
+	assertDbOpen()
+	var height int
+	err := db.QueryRow("SELECT COALESCE(MAX(height), -1) FROM blockchain").Scan(&height)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return height
+}

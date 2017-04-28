@@ -9,5 +9,6 @@ func main() {
 	configInit()
 	dbInit()
 	cryptoInit()
+	blockchainInit()
 	go p2pServer()
 }
