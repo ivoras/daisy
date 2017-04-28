@@ -1,4 +1,4 @@
-# Daisy - a minimal semi-public blockchain in Go
+# Daisy - a minimal semi-open blockchain in Go
 
 ## Design notes
 
@@ -8,7 +8,10 @@
     * The validity of the SQLite files
     * The presence of a special tables named `_meta` and `keys`,
     * The validity of the previous block hash in the `_meta` table
-    * The previous block hash is signed with a key which is present in the previous blocs' `_keys` table.
+    * The previous block hash is signed with a key which is present in the previous blocks' `_keys` table.
+    * The `_keys` table contains new key additions and revocations. Both signed by a number of existing keys, where the
+      number is given as "1 if height < 40 else floor(log(height)*3)
+    * Longest chain wins.
 * Flood-based p2p network: every node can request a list of known connections from the other nodes.
-* Longest chain wins.
+
 
