@@ -1,3 +1,4 @@
 Released under the GPLv3 license.
-
 (c) 2017 Ivan Voras <ivoras@gmail.com>
+
+Alternative / commercial licenses available.
