@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/hex"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -9,7 +8,7 @@ import (
 )
 
 // GenesisBlockHash is the SHA256 hash of the genesis block payload
-const GenesisBlockHash = "85404bd215ff98f3ea04b8c0c86180a79f2e1c38740d03b02f0bfff358dd1347"
+const GenesisBlockHash = "d8c44e8513ea5d76ddce49538dbf7e2d6223947418d4c2bb8d4668a378c5dfbf"
 
 const blockchainSubdirectoryName = "blocks"
 const blockFilenameFormat = "%s/block_%08d.db"
@@ -40,12 +39,20 @@ func blockchainInit() {
 		if err != nil {
 			log.Panicln(err)
 		}
-		fmt.Println(hex.EncodeToString(signature))
 		if err = cryptoVerifyPublicKeyHashSignature(&keypair.PublicKey, publicKeyHash, signature); err != nil {
+			log.Panicln(err)
+		}
+		signature, err = cryptoSignBytes(keypair, make([]byte, 0)) // empty array signature
+		if err != nil {
 			log.Panicln(err)
 		}
 
 		// Bring the genesis block into existence
-		ioutil.WriteFile(fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, 0), MustAsset("bindata/genesis.db"), 0644)
+		genesisBlock := MustAsset("bindata/genesis.db")
+		if hashBytesToHexString(genesisBlock) != GenesisBlockHash {
+			log.Panicln("Genesis block hash unexpected")
+		}
+
+		ioutil.WriteFile(fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, 0), genesisBlock, 0644)
 	}
 }

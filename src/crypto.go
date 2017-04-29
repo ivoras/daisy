@@ -47,11 +47,17 @@ func generatePrivateKey() *ecdsa.PrivateKey {
 	return keys
 }
 
-// returns a hex string prefixed with the hash type and ":",
+// Returns a hex string prefixed with the hash type and ":",
 // e.g. "1:b12d4ac..."
 func getPubKeyHash(b []byte) string {
 	hash := sha256.Sum256(b)
 	return "1:" + hex.EncodeToString(hash[:])
+}
+
+// Returns a hex-encoded hash of a random byte slice
+func hashBytesToHexString(b []byte) string {
+	hash := sha256.Sum256(b)
+	return hex.EncodeToString(hash[:])
 }
 
 // getAPrivateKey returns a random keypair read from the database
@@ -106,21 +112,11 @@ func cryptoSignPublicKeyHash(myPrivateKey *ecdsa.PrivateKey, publicKeyHash strin
 	if err != nil {
 		return nil, err
 	}
-	var sig ecdsaSignature
-	sig.R, sig.S, err = ecdsa.Sign(rand.Reader, myPrivateKey, publicKeyHashBytes)
-	signature, err := asn1.Marshal(sig)
-	if err != nil {
-		return nil, err
-	}
-	return signature, nil
+	return cryptoSignBytes(myPrivateKey, publicKeyHashBytes)
 }
 
+// Returns nil (i.e. "no error") if the verification succeeds
 func cryptoVerifyPublicKeyHashSignature(publicKey *ecdsa.PublicKey, publicKeyHash string, signature []byte) error {
-	var sig ecdsaSignature
-	_, err := asn1.Unmarshal(signature, &sig)
-	if err != nil {
-		return err
-	}
 	if publicKeyHash[1] != ':' {
 		return fmt.Errorf("cryptoVerifyPublicKeyHash() expects a public key in the \"type:hex\" format, not \"%s\"", publicKeyHash)
 	}
@@ -128,7 +124,28 @@ func cryptoVerifyPublicKeyHashSignature(publicKey *ecdsa.PublicKey, publicKeyHas
 	if err != nil {
 		return err
 	}
-	if ecdsa.Verify(publicKey, publicKeyHashBytes, sig.R, sig.S) {
+	return cryptoVerifyBytes(publicKey, publicKeyHashBytes, signature)
+}
+
+func cryptoSignBytes(myPrivateKey *ecdsa.PrivateKey, data []byte) ([]byte, error) {
+	var sig ecdsaSignature
+	var err error
+	sig.R, sig.S, err = ecdsa.Sign(rand.Reader, myPrivateKey, data)
+	signature, err := asn1.Marshal(sig)
+	if err != nil {
+		return nil, err
+	}
+	return signature, nil
+}
+
+func cryptoVerifyBytes(publicKey *ecdsa.PublicKey, hash []byte, signature []byte) error {
+	var sig ecdsaSignature
+	_, err := asn1.Unmarshal(signature, &sig)
+	if err != nil {
+		return err
+	}
+	if ecdsa.Verify(publicKey, hash, sig.R, sig.S) {
+		// Verification succeded
 		return nil
 	}
 	return fmt.Errorf("Signature verification failed")
