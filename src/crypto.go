@@ -78,11 +78,11 @@ func getAPrivateKey() (*ecdsa.PrivateKey, error) {
 	}
 
 	// Check if we can get the right public key hash back again
-	testPublicKey, err := x509.MarshalPKIXPublicKey(&keys.PublicKey)
+	testPublicKeyBytes, err := x509.MarshalPKIXPublicKey(&keys.PublicKey)
 	if err != nil {
 		log.Fatal(err)
 	}
-	testPublicKeyHash := getPubKeyHash(testPublicKey)
+	testPublicKeyHash := getPubKeyHash(testPublicKeyBytes)
 	if testPublicKeyHash != publicKeyHash {
 		return nil, fmt.Errorf("Loaded keypair %s, but the calculated public key hash doesn't match: %s", publicKeyHash, testPublicKeyHash)
 	}
@@ -102,15 +102,34 @@ func cryptoSignPublicKeyHash(myPrivateKey *ecdsa.PrivateKey, publicKeyHash strin
 	if publicKeyHash[1] != ':' {
 		return nil, fmt.Errorf("cryptoSignPublicKeyHash() expects a public key in the \"type:hex\" format, not \"%s\"", publicKeyHash)
 	}
-	publicKeyBytes, err := hex.DecodeString(publicKeyHash[2:])
+	publicKeyHashBytes, err := hex.DecodeString(publicKeyHash[2:])
 	if err != nil {
 		return nil, err
 	}
 	var sig ecdsaSignature
-	sig.R, sig.S, err = ecdsa.Sign(rand.Reader, myPrivateKey, publicKeyBytes)
+	sig.R, sig.S, err = ecdsa.Sign(rand.Reader, myPrivateKey, publicKeyHashBytes)
 	signature, err := asn1.Marshal(sig)
 	if err != nil {
 		return nil, err
 	}
 	return signature, nil
+}
+
+func cryptoVerifyPublicKeyHashSignature(publicKey *ecdsa.PublicKey, publicKeyHash string, signature []byte) error {
+	var sig ecdsaSignature
+	_, err := asn1.Unmarshal(signature, &sig)
+	if err != nil {
+		return err
+	}
+	if publicKeyHash[1] != ':' {
+		return fmt.Errorf("cryptoVerifyPublicKeyHash() expects a public key in the \"type:hex\" format, not \"%s\"", publicKeyHash)
+	}
+	publicKeyHashBytes, err := hex.DecodeString(publicKeyHash[2:])
+	if err != nil {
+		return err
+	}
+	if ecdsa.Verify(publicKey, publicKeyHashBytes, sig.R, sig.S) {
+		return nil
+	}
+	return fmt.Errorf("Signature verification failed")
 }

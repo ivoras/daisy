@@ -20,5 +20,8 @@ func blockchainInit() {
 			log.Fatalln(err)
 		}
 		fmt.Println(hex.EncodeToString(signature))
+		if err = cryptoVerifyPublicKeyHashSignature(&keypair.PublicKey, publicKeyHash, signature); err != nil {
+			log.Fatalln(err)
+		}
 	}
 }
