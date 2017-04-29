@@ -2,14 +2,23 @@ package main
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
+	"strconv"
+	"time"
 )
+
+// CurrentBlockVersion is the version of the block metadata
+const CurrentBlockVersion = 1
 
 // GenesisBlockHash is the SHA256 hash of the genesis block payload
 const GenesisBlockHash = "4c498d853114d9163fbdb88ec78aead6db3fa7c5f7aae153232bfa68e7dca374"
+
+// GenesisBlockTimestamp is the timestamp of the genesis block
+const GenesisBlockTimestamp = "Sat, 29 Apr 2017 12:53:13 +0200"
 
 const blockchainSubdirectoryName = "blocks"
 const blockFilenameFormat = "%s/block_%08d.db"
@@ -61,6 +70,19 @@ func blockchainInit() {
 		}
 		genesisBlockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, 0)
 		ioutil.WriteFile(genesisBlockFilename, genesisBlock, 0644)
+		b, err := ReadBlockFromFile(genesisBlockFilename)
+		if err != nil {
+			log.Panicln(err)
+		}
+		b.Height = 0
+		b.TimeAccepted, err = time.Parse(time.RFC1123Z, GenesisBlockTimestamp)
+		if err != nil {
+			log.Panicln(err)
+		}
+		err = dbInsertBlock(b.DbBlockchainBlock)
+		if err != nil {
+			log.Panicln(err)
+		}
 	}
 }
 
@@ -87,8 +109,9 @@ func OpenBlockByHeight(height int) (*Block, error) {
 	return &b, nil
 }
 
-// ReadBlockFromFile reads block metadata from the given database file
-func ReadBlockFromFile(fileName string, height int) (*Block, error) {
+// ReadBlockFromFile reads block metadata from the given database file.
+// Note that it will not fill-in all the fields. Notable, height is not stored in tje block db's metadata.
+func ReadBlockFromFile(fileName string) (*Block, error) {
 	hash, err := hashFileToHexString(fileName)
 	if err != nil {
 		return nil, err
@@ -98,7 +121,50 @@ func ReadBlockFromFile(fileName string, height int) (*Block, error) {
 		return nil, err
 	}
 	defer db.Close()
-	b := Block{DbBlockchainBlock: &DbBlockchainBlock{Height: height, Hash: hash}}
+	b := Block{DbBlockchainBlock: &DbBlockchainBlock{Hash: hash}, db: db}
+	b.Version, err = b.dbGetMetaInt("Version")
+	if err != nil {
+		return nil, err
+	}
+	b.PreviousBlockHash, err = b.dbGetMetaString("PreviousBlockHash")
+	if err != nil {
+		return nil, err
+	}
+	b.SignaturePublicKeyHash, err = b.dbGetMetaString("CreatorPublicKey")
+	if err != nil {
+		return nil, err
+	}
+	b.PreviousBlockHashSignature, err = b.dbGetMetaHexBytes("PreviousBlockHashSignature")
+	if err != nil {
+		return nil, err
+	}
 
 	return &b, nil
+}
+
+func (b *Block) dbGetMetaInt(key string) (int, error) {
+	var value string
+	err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value)
+	if err != nil {
+		return -1, err
+	}
+	return strconv.Atoi(value)
+}
+
+func (b *Block) dbGetMetaString(key string) (string, error) {
+	var value string
+	err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value)
+	if err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func (b *Block) dbGetMetaHexBytes(key string) ([]byte, error) {
+	var value string
+	err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value)
+	if err != nil {
+		return nil, err
+	}
+	return hex.DecodeString(value)
 }

@@ -81,13 +81,14 @@ func hashFileToHexString(fileName string) (string, error) {
 func getAPrivateKey() (*ecdsa.PrivateKey, error) {
 	privateKeyBytes, publicKeyHash, err := dbGetAPrivateKey()
 	if err != nil {
-		log.Panicln(err)
 		return nil, err
 	}
 	dbPubKey, err := dbGetPublicKey(publicKeyHash)
+	if err != nil {
+		return nil, err
+	}
 	keys, err := x509.ParseECPrivateKey(privateKeyBytes)
 	if err != nil {
-		log.Panicln(err)
 		return nil, err
 	}
 	pubKey, err := x509.ParsePKIXPublicKey(dbPubKey.publicKeyBytes)

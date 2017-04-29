@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strconv"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -18,12 +17,13 @@ const privateDbFilename = "private.db"
 
 // DbBlockchainBlock is the convenience structure holding information from the blockchain table
 type DbBlockchainBlock struct {
-	Hash                   string
-	Height                 int
-	PreviousBlockHash      string
-	SignaturePublicKeyHash string
-	Signature              []byte
-	TimeAccepted           time.Time
+	Hash                       string
+	Height                     int
+	PreviousBlockHash          string
+	SignaturePublicKeyHash     string
+	PreviousBlockHashSignature []byte
+	TimeAccepted               time.Time
+	Version                    int
 }
 
 // Note: all db times are Unix timestamps in the UTC zone
@@ -35,7 +35,8 @@ CREATE TABLE blockchain (
 	prev_hash		VARCHAR NOT NULL,
 	sigkey_hash		VARCHAR NOT NULL, -- public key hash
 	signature		VARCHAR NOT NULL,
-	time_accepted	INTEGER NOT NULL
+	time_accepted	INTEGER NOT NULL,
+	version			INTEGER NOT NULL,
 );
 CREATE INDEX blockchain_sigkey_hash ON blockchain(sigkey_hash);
 `
@@ -70,24 +71,24 @@ CREATE TABLE privkeys (
 );
 `
 
-var db *sql.DB
+var mainDb *sql.DB
 var privateDb *sql.DB
 
 func dbInit() {
 	dbFileName := fmt.Sprintf("%s/%s", cfg.DataDir, mainDbFileName)
 	_, err := os.Stat(dbFileName)
 	mainDbFileExists := err == nil
-	db, err = sql.Open("sqlite3", dbFileName)
+	mainDb, err = sql.Open("sqlite3", dbFileName)
 	if err != nil {
 		log.Fatal(err)
 	}
 	if !mainDbFileExists {
 		// Create system tables
-		_, err = db.Exec(blockchainTableCreate)
+		_, err = mainDb.Exec(blockchainTableCreate)
 		if err != nil {
 			log.Fatal(err)
 		}
-		_, err = db.Exec(myKeysTableCreate)
+		_, err = mainDb.Exec(myKeysTableCreate)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -128,13 +129,13 @@ func dbNumPrivateKeys() int {
 }
 
 func assertSysDbOpen() {
-	if db == nil || privateDb == nil {
+	if mainDb == nil || privateDb == nil {
 		log.Fatal("Databases are not open")
 	}
 }
 
 func dbWritePublicKey(pubkey []byte, hash string) {
-	_, err := db.Exec("INSERT INTO pubkeys(pubkey_hash, pubkey, state, time_added) VALUES (?, ?, ?, ?)", hash, hex.EncodeToString(pubkey), "A", time.Now().Unix())
+	_, err := mainDb.Exec("INSERT INTO pubkeys(pubkey_hash, pubkey, state, time_added) VALUES (?, ?, ?, ?)", hash, hex.EncodeToString(pubkey), "A", time.Now().Unix())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -150,7 +151,7 @@ func dbWritePrivateKey(privkey []byte, hash string) {
 func dbGetBlockchainHeight() int {
 	assertSysDbOpen()
 	var height int
-	err := db.QueryRow("SELECT COALESCE(MAX(height), -1) FROM blockchain").Scan(&height)
+	err := mainDb.QueryRow("SELECT COALESCE(MAX(height), -1) FROM blockchain").Scan(&height)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -181,25 +182,29 @@ func dbGetPublicKey(publicKeyHash string) (*DbPubKey, error) {
 	var timeAdded int
 	var timeRevoked int
 	var metadata string
-	err := db.QueryRow("SELECT pubkey_hash, pubkey, state, time_added, COALESCE(time_revoked, -1), COALESCE(metadata, '') FROM pubkeys WHERE pubkey_hash=?", publicKeyHash).Scan(
-		&dbpk.publicKeyHash, &publicKeyHexString, &dbpk.state, dbpk.timeAdded, dbpk.timeRevoked, metadata)
+	err := mainDb.QueryRow("SELECT pubkey_hash, pubkey, state, time_added, COALESCE(time_revoked, -1), COALESCE(metadata, '') FROM pubkeys WHERE pubkey_hash=?", publicKeyHash).Scan(
+		&dbpk.publicKeyHash, &publicKeyHexString, &dbpk.state, &timeAdded, &timeRevoked, &metadata)
 	if err != nil && err != sql.ErrNoRows {
 		log.Panicln(err)
 	}
 	if err == sql.ErrNoRows {
+		log.Println("eh 1")
 		return nil, err
 	}
 	dbpk.publicKeyBytes, err = hex.DecodeString(publicKeyHexString)
 	if err != nil {
+		log.Println("eh 2")
 		return nil, err
 	}
-	dbpk.timeAdded, err = time.ParseInLocation(time.UnixDate, strconv.Itoa(timeAdded), time.UTC)
+	dbpk.timeAdded = unixTimeStampToUTCTime(timeAdded)
 	if err != nil {
+		log.Println("eh 3", err)
 		return nil, err
 	}
 	if timeRevoked != -1 {
-		dbpk.timeRevoked, err = time.ParseInLocation(time.UnixDate, strconv.Itoa(timeRevoked), time.UTC)
+		dbpk.timeRevoked = unixTimeStampToUTCTime(timeRevoked)
 		if err != nil {
+			log.Println("Public key timeRevoked parsing failed for", publicKeyHash)
 			return nil, err
 		}
 		dbpk.isRevoked = true
@@ -207,31 +212,32 @@ func dbGetPublicKey(publicKeyHash string) (*DbPubKey, error) {
 		dbpk.isRevoked = false
 	}
 	if metadata != "" {
-		err := json.Unmarshal([]byte(metadata), &dbpk.metadata)
+		err = json.Unmarshal([]byte(metadata), &dbpk.metadata)
 		if err != nil {
+			log.Println("Public key metadata unmarshall failed for", publicKeyHash)
 			return nil, err
 		}
 	}
-	return &dbpk, err
+	return &dbpk, nil
 }
 
 func dbGetBlockByHeight(height int) (*DbBlockchainBlock, error) {
 	var dbb DbBlockchainBlock
 	var signatureHex string
 	var timeAccepted int
-	err := db.QueryRow("SELECT hash, height, prev_hash, sigkey_hash, signature, time_accepted FROM blockchain WHERE height=?", height).Scan(
-		&dbb.Hash, &dbb.Height, &dbb.PreviousBlockHash, &dbb.SignaturePublicKeyHash, &signatureHex, &timeAccepted)
+	err := mainDb.QueryRow("SELECT hash, height, prev_hash, sigkey_hash, signature, time_accepted, version FROM blockchain WHERE height=?", height).Scan(
+		&dbb.Hash, &dbb.Height, &dbb.PreviousBlockHash, &dbb.SignaturePublicKeyHash, &signatureHex, &timeAccepted, &dbb.Version)
 	if err != nil && err != sql.ErrNoRows {
 		log.Panicln(err)
 	}
 	if err == sql.ErrNoRows {
 		return nil, err
 	}
-	dbb.Signature, err = hex.DecodeString(signatureHex)
+	dbb.PreviousBlockHashSignature, err = hex.DecodeString(signatureHex)
 	if err != nil {
 		return nil, err
 	}
-	dbb.TimeAccepted, err = time.ParseInLocation(time.UnixDate, strconv.Itoa(timeAccepted), time.UTC)
+	dbb.TimeAccepted = unixTimeStampToUTCTime(timeAccepted)
 	if err != nil {
 		return nil, err
 	}
@@ -239,8 +245,8 @@ func dbGetBlockByHeight(height int) (*DbBlockchainBlock, error) {
 }
 
 // Inserts a block record into the main database, without validation
-func dbInsertBlock(dbb DbBlockchainBlock) error {
-	_, err := db.Exec("INSERT INTO blockchain (hash, height, prev_hash, sigkey_hash, signature, time_accepted) VALUES (?, ?, ?, ?, ?, ?)",
-		dbb.Hash, dbb.Height, dbb.PreviousBlockHash, dbb.SignaturePublicKeyHash, hex.EncodeToString(dbb.Signature), dbb.TimeAccepted.Unix())
+func dbInsertBlock(dbb *DbBlockchainBlock) error {
+	_, err := mainDb.Exec("INSERT INTO blockchain (hash, height, prev_hash, sigkey_hash, signature, time_accepted, version) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		dbb.Hash, dbb.Height, dbb.PreviousBlockHash, dbb.SignaturePublicKeyHash, hex.EncodeToString(dbb.PreviousBlockHashSignature), dbb.TimeAccepted.Unix(), dbb.Version)
 	return err
 }
