@@ -58,18 +58,18 @@ func getPubKeyHash(b []byte) string {
 func getAPrivateKey() (*ecdsa.PrivateKey, error) {
 	privateKeyBytes, publicKeyHash, err := dbGetAPrivateKey()
 	if err != nil {
-		log.Println(err)
+		log.Panicln(err)
 		return nil, err
 	}
 	dbPubKey, err := dbGetPublicKey(publicKeyHash)
 	keys, err := x509.ParseECPrivateKey(privateKeyBytes)
 	if err != nil {
-		log.Println(err)
+		log.Panicln(err)
 		return nil, err
 	}
 	pubKey, err := x509.ParsePKIXPublicKey(dbPubKey.publicKeyBytes)
 	if err != nil {
-		log.Println(err)
+		log.Panicln(err)
 		return nil, err
 	}
 	keys.PublicKey = *pubKey.(*ecdsa.PublicKey)
@@ -80,7 +80,7 @@ func getAPrivateKey() (*ecdsa.PrivateKey, error) {
 	// Check if we can get the right public key hash back again
 	testPublicKeyBytes, err := x509.MarshalPKIXPublicKey(&keys.PublicKey)
 	if err != nil {
-		log.Fatal(err)
+		log.Panicln(err)
 	}
 	testPublicKeyHash := getPubKeyHash(testPublicKeyBytes)
 	if testPublicKeyHash != publicKeyHash {
