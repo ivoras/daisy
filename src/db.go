@@ -35,6 +35,15 @@ CREATE TABLE pubkeys (
 );
 `
 
+// DbPubKey is the convenience structure holding information from the pubkeys table
+type DbPubKey struct {
+	publicKeyHash  string
+	publicKeyBytes []byte
+	state          string
+	timeAdded      int
+	timeRevoked    int
+}
+
 const privateTableCreate = `
 CREATE TABLE privkeys (
 	pubkey_hash		VARCHAR NOT NULL PRIMARY KEY,
@@ -121,4 +130,41 @@ func dbGetBlockchainHeight() int {
 		log.Fatal(err)
 	}
 	return height
+}
+
+func dbGetAPrivateKey() ([]byte, string, error) {
+	var publicKeyHash string
+	var privateKey string
+	err := privateDb.QueryRow("SELECT pubkey_hash, privkey FROM privkeys LIMIT 1").Scan(&publicKeyHash, &privateKey)
+	if err != nil && err != sql.ErrNoRows {
+		log.Fatal(err)
+	}
+	if err == sql.ErrNoRows {
+		return nil, "", err
+	}
+	privateKeyBytes, err := hex.DecodeString(privateKey)
+	if err != nil {
+		log.Println(err)
+		return nil, "", err
+	}
+	return privateKeyBytes, publicKeyHash, nil
+}
+
+func dbGetPublicKey(publicKeyHash string) (*DbPubKey, error) {
+	var dbpk DbPubKey
+	var publicKeyHexString string
+	err := db.QueryRow("SELECT pubkey_hash, pubkey, state, time_added, COALESCE(time_revoked, -1) FROM pubkeys WHERE pubkey_hash=?", publicKeyHash).Scan(
+		&dbpk.publicKeyHash, &publicKeyHexString, &dbpk.state, &dbpk.timeAdded, &dbpk.timeRevoked)
+	if err != nil && err != sql.ErrNoRows {
+		log.Fatal(err)
+	}
+	if err == sql.ErrNoRows {
+		return nil, err
+	}
+	dbpk.publicKeyBytes, err = hex.DecodeString(publicKeyHexString)
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+	return &dbpk, err
 }
