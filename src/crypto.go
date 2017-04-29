@@ -9,8 +9,10 @@ import (
 	"encoding/asn1"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
+	"os"
 )
 
 type ecdsaSignature struct {
@@ -54,10 +56,25 @@ func getPubKeyHash(b []byte) string {
 	return "1:" + hex.EncodeToString(hash[:])
 }
 
-// Returns a hex-encoded hash of a random byte slice
+// Returns a hex-encoded hash of the given byte slice
 func hashBytesToHexString(b []byte) string {
 	hash := sha256.Sum256(b)
 	return hex.EncodeToString(hash[:])
+}
+
+// Returns a hex-encoded hash of the given file
+func hashFileToHexString(fileName string) (string, error) {
+	file, err := os.Open(fileName)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	_, err = io.Copy(hash, file)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // getAPrivateKey returns a random keypair read from the database

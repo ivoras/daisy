@@ -2,11 +2,12 @@ package main
 
 import (
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-
-	"encoding/hex"
+	"strconv"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -15,12 +16,26 @@ import (
 const mainDbFileName = "daisy.db"
 const privateDbFilename = "private.db"
 
+// DbBlockchainBlock is the convenience structure holding information from the blockchain table
+type DbBlockchainBlock struct {
+	Hash                   string
+	Height                 int
+	PreviousBlockHash      string
+	SignaturePublicKeyHash string
+	Signature              []byte
+	TimeAccepted           time.Time
+}
+
+// Note: all db times are Unix timestamps in the UTC zone
+
 const blockchainTableCreate = `
 CREATE TABLE blockchain (
 	hash			VARCHAR NOT NULL PRIMARY KEY,
 	height			INTEGER NOT NULL UNIQUE,
-	sigkey_hash		VARCHAR NOT NULL,
-	signature		VARCHAR NOT NULL
+	prev_hash		VARCHAR NOT NULL,
+	sigkey_hash		VARCHAR NOT NULL, -- public key hash
+	signature		VARCHAR NOT NULL,
+	time_accepted	INTEGER NOT NULL
 );
 CREATE INDEX blockchain_sigkey_hash ON blockchain(sigkey_hash);
 `
@@ -31,7 +46,8 @@ CREATE TABLE pubkeys (
 	pubkey			VARCHAR NOT NULL,
 	state			CHAR NOT NULL,
 	time_added		INTEGER NOT NULL,
-	time_revoked	INTEGER
+	time_revoked	INTEGER,
+	metadata		VARCHAR -- JSON
 );
 `
 
@@ -40,8 +56,10 @@ type DbPubKey struct {
 	publicKeyHash  string
 	publicKeyBytes []byte
 	state          string
-	timeAdded      int
-	timeRevoked    int
+	timeAdded      time.Time
+	isRevoked      bool
+	timeRevoked    time.Time
+	metadata       map[string]string
 }
 
 const privateTableCreate = `
@@ -92,8 +110,15 @@ func dbInit() {
 	}
 }
 
+func dbOpen(fileName string, readOnly bool) (*sql.DB, error) {
+	if !readOnly {
+		return sql.Open("sqlite3", fileName)
+	}
+	return sql.Open("sqlite3", "file:"+fileName+"?mode=ro")
+}
+
 func dbNumPrivateKeys() int {
-	assertDbOpen()
+	assertSysDbOpen()
 	var count int
 	err := privateDb.QueryRow("SELECT COUNT(*) FROM privkeys").Scan(&count)
 	if err != nil {
@@ -102,7 +127,7 @@ func dbNumPrivateKeys() int {
 	return count
 }
 
-func assertDbOpen() {
+func assertSysDbOpen() {
 	if db == nil || privateDb == nil {
 		log.Fatal("Databases are not open")
 	}
@@ -123,7 +148,7 @@ func dbWritePrivateKey(privkey []byte, hash string) {
 }
 
 func dbGetBlockchainHeight() int {
-	assertDbOpen()
+	assertSysDbOpen()
 	var height int
 	err := db.QueryRow("SELECT COALESCE(MAX(height), -1) FROM blockchain").Scan(&height)
 	if err != nil {
@@ -153,18 +178,69 @@ func dbGetAPrivateKey() ([]byte, string, error) {
 func dbGetPublicKey(publicKeyHash string) (*DbPubKey, error) {
 	var dbpk DbPubKey
 	var publicKeyHexString string
-	err := db.QueryRow("SELECT pubkey_hash, pubkey, state, time_added, COALESCE(time_revoked, -1) FROM pubkeys WHERE pubkey_hash=?", publicKeyHash).Scan(
-		&dbpk.publicKeyHash, &publicKeyHexString, &dbpk.state, &dbpk.timeAdded, &dbpk.timeRevoked)
+	var timeAdded int
+	var timeRevoked int
+	var metadata string
+	err := db.QueryRow("SELECT pubkey_hash, pubkey, state, time_added, COALESCE(time_revoked, -1), COALESCE(metadata, '') FROM pubkeys WHERE pubkey_hash=?", publicKeyHash).Scan(
+		&dbpk.publicKeyHash, &publicKeyHexString, &dbpk.state, dbpk.timeAdded, dbpk.timeRevoked, metadata)
 	if err != nil && err != sql.ErrNoRows {
-		log.Fatal(err)
+		log.Panicln(err)
 	}
 	if err == sql.ErrNoRows {
 		return nil, err
 	}
 	dbpk.publicKeyBytes, err = hex.DecodeString(publicKeyHexString)
 	if err != nil {
-		log.Println(err)
 		return nil, err
 	}
+	dbpk.timeAdded, err = time.ParseInLocation(time.UnixDate, strconv.Itoa(timeAdded), time.UTC)
+	if err != nil {
+		return nil, err
+	}
+	if timeRevoked != -1 {
+		dbpk.timeRevoked, err = time.ParseInLocation(time.UnixDate, strconv.Itoa(timeRevoked), time.UTC)
+		if err != nil {
+			return nil, err
+		}
+		dbpk.isRevoked = true
+	} else {
+		dbpk.isRevoked = false
+	}
+	if metadata != "" {
+		err := json.Unmarshal([]byte(metadata), &dbpk.metadata)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &dbpk, err
+}
+
+func dbGetBlockByHeight(height int) (*DbBlockchainBlock, error) {
+	var dbb DbBlockchainBlock
+	var signatureHex string
+	var timeAccepted int
+	err := db.QueryRow("SELECT hash, height, prev_hash, sigkey_hash, signature, time_accepted FROM blockchain WHERE height=?", height).Scan(
+		&dbb.Hash, &dbb.Height, &dbb.PreviousBlockHash, &dbb.SignaturePublicKeyHash, &signatureHex, &timeAccepted)
+	if err != nil && err != sql.ErrNoRows {
+		log.Panicln(err)
+	}
+	if err == sql.ErrNoRows {
+		return nil, err
+	}
+	dbb.Signature, err = hex.DecodeString(signatureHex)
+	if err != nil {
+		return nil, err
+	}
+	dbb.TimeAccepted, err = time.ParseInLocation(time.UnixDate, strconv.Itoa(timeAccepted), time.UTC)
+	if err != nil {
+		return nil, err
+	}
+	return &dbb, nil
+}
+
+// Inserts a block record into the main database, without validation
+func dbInsertBlock(dbb DbBlockchainBlock) error {
+	_, err := db.Exec("INSERT INTO blockchain (hash, height, prev_hash, sigkey_hash, signature, time_accepted) VALUES (?, ?, ?, ?, ?, ?)",
+		dbb.Hash, dbb.Height, dbb.PreviousBlockHash, dbb.SignaturePublicKeyHash, hex.EncodeToString(dbb.Signature), dbb.TimeAccepted.Unix())
+	return err
 }

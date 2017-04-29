@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -8,12 +9,18 @@ import (
 )
 
 // GenesisBlockHash is the SHA256 hash of the genesis block payload
-const GenesisBlockHash = "d8c44e8513ea5d76ddce49538dbf7e2d6223947418d4c2bb8d4668a378c5dfbf"
+const GenesisBlockHash = "4c498d853114d9163fbdb88ec78aead6db3fa7c5f7aae153232bfa68e7dca374"
 
 const blockchainSubdirectoryName = "blocks"
 const blockFilenameFormat = "%s/block_%08d.db"
 
 var blockchainSubdirectory string
+
+// Block is the working representation of a blockchain block
+type Block struct {
+	*DbBlockchainBlock
+	db *sql.DB
+}
 
 func blockchainInit() {
 	blockchainSubdirectory = fmt.Sprintf("%s/%s", cfg.DataDir, blockchainSubdirectoryName)
@@ -52,7 +59,46 @@ func blockchainInit() {
 		if hashBytesToHexString(genesisBlock) != GenesisBlockHash {
 			log.Panicln("Genesis block hash unexpected")
 		}
-
-		ioutil.WriteFile(fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, 0), genesisBlock, 0644)
+		genesisBlockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, 0)
+		ioutil.WriteFile(genesisBlockFilename, genesisBlock, 0644)
 	}
+}
+
+// OpenBlockByHeight opens a block stored in the blockchain at the given height
+func OpenBlockByHeight(height int) (*Block, error) {
+	b := Block{DbBlockchainBlock: &DbBlockchainBlock{Height: height}}
+	blockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, height)
+	hash, err := hashFileToHexString(blockFilename)
+	if err != nil {
+		return nil, err
+	}
+	dbb, err := dbGetBlockByHeight(height)
+	if err != nil {
+		return nil, err
+	}
+	if hash != dbb.Hash {
+		return nil, fmt.Errorf("Recorded block hash doesn't match actual: %s vs %s", dbb.Hash, hash)
+	}
+	b.DbBlockchainBlock = dbb
+	b.db, err = dbOpen(blockFilename, true)
+	if err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+// ReadBlockFromFile reads block metadata from the given database file
+func ReadBlockFromFile(fileName string, height int) (*Block, error) {
+	hash, err := hashFileToHexString(fileName)
+	if err != nil {
+		return nil, err
+	}
+	db, err := dbOpen(fileName, true)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	b := Block{DbBlockchainBlock: &DbBlockchainBlock{Height: height, Hash: hash}}
+
+	return &b, nil
 }
