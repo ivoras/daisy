@@ -21,7 +21,7 @@ const GenesisBlockHash = "8cee737a33962b419060a10213b8963e3e52cbac9beabf2004c4b2
 const GenesisBlockHashSignature = "30450220225f84a2cd13f20c24c0d010bcf51bde3395c1e7409e78cff1271fb2b074f08a022100b077fbf3cd296015772182065c8ca94558fbd7afd1b7ea619197ed4c5e0dc26f"
 
 // GenesisBlockTimestamp is the timestamp of the genesis block
-const GenesisBlockTimestamp = "Sun, 30 Apr 2017 08:00:00 +0200"
+const GenesisBlockTimestamp = "Sun, 30 Apr 2017 10:14:28 +0200"
 
 const blockchainSubdirectoryName = "blocks"
 const blockFilenameFormat = "%s/block_%08d.db"
@@ -79,6 +79,10 @@ func blockchainInit() {
 		}
 		b.Height = 0
 		b.TimeAccepted, err = time.Parse(time.RFC1123Z, GenesisBlockTimestamp)
+		if err != nil {
+			log.Panicln(err)
+		}
+		b.HashSignature, err = hex.DecodeString(GenesisBlockHashSignature)
 		if err != nil {
 			log.Panicln(err)
 		}
