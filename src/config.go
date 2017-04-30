@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
+	"os/user"
 )
 
 // DefaultP2PPort is the default TCP port for p2p connections
@@ -15,7 +17,7 @@ const DefaultP2PPort = 2017
 const DefaultConfigFile = "/etc/daisy/config.json"
 
 // DefaultDataDir is the default data directory
-const DefaultDataDir = "/var/lib/daisy"
+const DefaultDataDir = ".daisy"
 
 var cfg struct {
 	configFile string
@@ -24,9 +26,14 @@ var cfg struct {
 }
 
 func configInit() {
+	u, err := user.Current()
+	if err != nil {
+		log.Panicln(err)
+	}
+	cfg.DataDir = fmt.Sprintf("%s/%s", u.HomeDir, DefaultDataDir)
+
 	// Init defaults
 	cfg.P2pPort = DefaultP2PPort
-	cfg.DataDir = DefaultDataDir
 
 	// Config file is parsed first
 	for i, arg := range os.Args {
@@ -47,7 +54,11 @@ func configInit() {
 	flag.Parse()
 
 	if _, err := os.Stat(cfg.DataDir); err != nil {
-		log.Fatal("Data directory", cfg.DataDir, "doesn't exist")
+		log.Println("Data directory", cfg.DataDir, "doesn't exist, creating.")
+		err = os.Mkdir(cfg.DataDir, 0700)
+		if err != nil {
+			log.Panicln(err)
+		}
 	}
 	if cfg.P2pPort < 1 || cfg.P2pPort > 65535 {
 		log.Fatal("Invalid TCP port", cfg.P2pPort)
