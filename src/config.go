@@ -24,22 +24,26 @@ var cfg struct {
 }
 
 func configInit() {
+	// Init defaults
+	cfg.P2pPort = DefaultP2PPort
+	cfg.DataDir = DefaultDataDir
+
 	// Config file is parsed first
-	args := flag.Args()
-	for i, arg := range args {
+	for i, arg := range os.Args {
 		if arg == "-conf" {
-			if i+1 >= len(args) {
+			if i+1 >= len(os.Args) {
 				log.Fatal("-conf requires filename argument")
 			}
-			cfg.configFile = args[i+1]
+			cfg.configFile = os.Args[i+1]
 		}
 	}
 	if cfg.configFile != "" {
 		loadConfigFile()
 	}
 
-	flag.IntVar(&cfg.P2pPort, "port", DefaultP2PPort, "P2P port")
-	flag.StringVar(&cfg.DataDir, "dir", DefaultDataDir, "Data directory")
+	// Then override the configuration with command-line flags
+	flag.IntVar(&cfg.P2pPort, "port", cfg.P2pPort, "P2P port")
+	flag.StringVar(&cfg.DataDir, "dir", cfg.DataDir, "Data directory")
 	flag.Parse()
 
 	if _, err := os.Stat(cfg.DataDir); err != nil {

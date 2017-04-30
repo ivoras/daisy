@@ -17,11 +17,12 @@ const privateDbFilename = "private.db"
 
 // DbBlockchainBlock is the convenience structure holding information from the blockchain table
 type DbBlockchainBlock struct {
-	Hash                       string
 	Height                     int
+	Hash                       string
 	PreviousBlockHash          string
 	SignaturePublicKeyHash     string
 	PreviousBlockHashSignature []byte
+	HashSignature              []byte
 	TimeAccepted               time.Time
 	Version                    int
 }
@@ -30,13 +31,14 @@ type DbBlockchainBlock struct {
 
 const blockchainTableCreate = `
 CREATE TABLE blockchain (
-	hash			VARCHAR NOT NULL PRIMARY KEY,
-	height			INTEGER NOT NULL UNIQUE,
-	prev_hash		VARCHAR NOT NULL,
-	sigkey_hash		VARCHAR NOT NULL, -- public key hash
-	signature		VARCHAR NOT NULL,
-	time_accepted	INTEGER NOT NULL,
-	version			INTEGER NOT NULL,
+	height				INTEGER NOT NULL UNIQUE,
+	sigkey_hash			VARCHAR NOT NULL, -- public key hash of the block creator
+	hash				VARCHAR NOT NULL PRIMARY KEY,
+	hash_signature		VARCHAR NOT NULL,
+	prev_hash			VARCHAR NOT NULL,
+	prev_hash_signature	VARCHAR NOT NULL,
+	time_accepted		INTEGER NOT NULL,
+	version				INTEGER NOT NULL
 );
 CREATE INDEX blockchain_sigkey_hash ON blockchain(sigkey_hash);
 `
@@ -188,17 +190,14 @@ func dbGetPublicKey(publicKeyHash string) (*DbPubKey, error) {
 		log.Panicln(err)
 	}
 	if err == sql.ErrNoRows {
-		log.Println("eh 1")
 		return nil, err
 	}
 	dbpk.publicKeyBytes, err = hex.DecodeString(publicKeyHexString)
 	if err != nil {
-		log.Println("eh 2")
 		return nil, err
 	}
 	dbpk.timeAdded = unixTimeStampToUTCTime(timeAdded)
 	if err != nil {
-		log.Println("eh 3", err)
 		return nil, err
 	}
 	if timeRevoked != -1 {
@@ -223,17 +222,22 @@ func dbGetPublicKey(publicKeyHash string) (*DbPubKey, error) {
 
 func dbGetBlockByHeight(height int) (*DbBlockchainBlock, error) {
 	var dbb DbBlockchainBlock
-	var signatureHex string
+	var hashSignatureHex string
+	var prevHashSignatureHex string
 	var timeAccepted int
-	err := mainDb.QueryRow("SELECT hash, height, prev_hash, sigkey_hash, signature, time_accepted, version FROM blockchain WHERE height=?", height).Scan(
-		&dbb.Hash, &dbb.Height, &dbb.PreviousBlockHash, &dbb.SignaturePublicKeyHash, &signatureHex, &timeAccepted, &dbb.Version)
+	err := mainDb.QueryRow("SELECT hash, height, prev_hash, sigkey_hash, hash_signature, prev_hash_signature, time_accepted, version FROM blockchain WHERE height=?", height).Scan(
+		&dbb.Hash, &dbb.Height, &dbb.PreviousBlockHash, &dbb.SignaturePublicKeyHash, &hashSignatureHex, &prevHashSignatureHex, &timeAccepted, &dbb.Version)
 	if err != nil && err != sql.ErrNoRows {
 		log.Panicln(err)
 	}
 	if err == sql.ErrNoRows {
 		return nil, err
 	}
-	dbb.PreviousBlockHashSignature, err = hex.DecodeString(signatureHex)
+	dbb.PreviousBlockHashSignature, err = hex.DecodeString(prevHashSignatureHex)
+	if err != nil {
+		return nil, err
+	}
+	dbb.HashSignature, err = hex.DecodeString(hashSignatureHex)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +250,8 @@ func dbGetBlockByHeight(height int) (*DbBlockchainBlock, error) {
 
 // Inserts a block record into the main database, without validation
 func dbInsertBlock(dbb *DbBlockchainBlock) error {
-	_, err := mainDb.Exec("INSERT INTO blockchain (hash, height, prev_hash, sigkey_hash, signature, time_accepted, version) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		dbb.Hash, dbb.Height, dbb.PreviousBlockHash, dbb.SignaturePublicKeyHash, hex.EncodeToString(dbb.PreviousBlockHashSignature), dbb.TimeAccepted.Unix(), dbb.Version)
+	_, err := mainDb.Exec("INSERT INTO blockchain (hash, height, prev_hash, sigkey_hash, hash_signature, prev_hash_signature, time_accepted, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		dbb.Hash, dbb.Height, dbb.PreviousBlockHash, dbb.SignaturePublicKeyHash, hex.EncodeToString(dbb.HashSignature), hex.EncodeToString(dbb.PreviousBlockHashSignature),
+		dbb.TimeAccepted.Unix(), dbb.Version)
 	return err
 }

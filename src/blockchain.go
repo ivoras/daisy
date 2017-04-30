@@ -15,10 +15,13 @@ import (
 const CurrentBlockVersion = 1
 
 // GenesisBlockHash is the SHA256 hash of the genesis block payload
-const GenesisBlockHash = "4c498d853114d9163fbdb88ec78aead6db3fa7c5f7aae153232bfa68e7dca374"
+const GenesisBlockHash = "8cee737a33962b419060a10213b8963e3e52cbac9beabf2004c4b2bc9cc900ca"
+
+// GenesisBlockHashSignature is the signature of the genesis block's hash, with the key in the genesis block
+const GenesisBlockHashSignature = "30450220225f84a2cd13f20c24c0d010bcf51bde3395c1e7409e78cff1271fb2b074f08a022100b077fbf3cd296015772182065c8ca94558fbd7afd1b7ea619197ed4c5e0dc26f"
 
 // GenesisBlockTimestamp is the timestamp of the genesis block
-const GenesisBlockTimestamp = "Sat, 29 Apr 2017 12:53:13 +0200"
+const GenesisBlockTimestamp = "Sun, 30 Apr 2017 08:00:00 +0200"
 
 const blockchainSubdirectoryName = "blocks"
 const blockFilenameFormat = "%s/block_%08d.db"
