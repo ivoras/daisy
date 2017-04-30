@@ -3,9 +3,11 @@ package main
 import (
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"time"
@@ -34,6 +36,16 @@ type Block struct {
 	db *sql.DB
 }
 
+// BlockKeyOp is the representation of a key op record from the blocks' _keys table.
+type BlockKeyOp struct {
+	op               string
+	publicKeyHash    string
+	publicKeyBytes   []byte
+	signatureKeyHash string
+	signature        []byte
+	metadata         map[string]string
+}
+
 func blockchainInit() {
 	blockchainSubdirectory = fmt.Sprintf("%s/%s", cfg.DataDir, blockchainSubdirectoryName)
 	if _, err := os.Stat(blockchainSubdirectory); err != nil {
@@ -53,7 +65,7 @@ func blockchainInit() {
 		if err != nil {
 			log.Panicln(err)
 		}
-		publicKeyHash := cryptoMustGetPublicKeyHash(keypair)
+		publicKeyHash := cryptoMustGetPublicKeyHash(&keypair.PublicKey)
 		signature, err := cryptoSignPublicKeyHash(keypair, publicKeyHash)
 		if err != nil {
 			log.Panicln(err)
@@ -86,11 +98,142 @@ func blockchainInit() {
 		if err != nil {
 			log.Panicln(err)
 		}
+		blockKeyOps, err := b.dbGetKeyOps()
+		if err != nil {
+			log.Panicln(err)
+		}
+		for _, keyOps := range blockKeyOps {
+			for _, keyOp := range keyOps {
+				if dbPublicKeyExists(keyOp.publicKeyHash) {
+					continue
+				}
+				dbWritePublicKey(keyOp.publicKeyBytes, keyOp.publicKeyHash, 0)
+			}
+		}
 		err = dbInsertBlock(b.DbBlockchainBlock)
 		if err != nil {
 			log.Panicln(err)
 		}
 	}
+	err := blockchainVerifyEverything()
+	if err != nil {
+		log.Fatalln(err)
+	}
+}
+
+func blockchainVerifyEverything() error {
+	maxHeight := dbGetBlockchainHeight()
+	var err error
+	for height := 0; height <= maxHeight; height++ {
+		if height%1000 == 0 {
+			log.Println("Verifying block", height)
+		}
+		blockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, height)
+		fileHash, err := hashFileToHexString(blockFilename)
+		if err != nil {
+			return fmt.Errorf("Error verifying block %d: %s", height, err)
+		}
+		dbb, err := dbGetBlockByHeight(height)
+		if err != nil {
+			return fmt.Errorf("Db error verifying block %d: %s", height, err)
+		}
+		if fileHash != dbb.Hash {
+			msg := fmt.Sprintf("Error verifying block %d: file hash %s doesn't match db hash %s", height, fileHash, dbb.Hash)
+			log.Println(msg)
+			err = fmt.Errorf(msg)
+		}
+		dbpk, err := dbGetPublicKey(dbb.SignaturePublicKeyHash)
+		if err != nil {
+			msg := fmt.Sprintf("Db error verifying block %d: error getting public key %s", height, dbb.SignaturePublicKeyHash)
+			log.Println(msg)
+			err = fmt.Errorf(msg)
+		}
+		creatorPublicKey, err := cryptoDecodePublicKeyBytes(dbpk.publicKeyBytes)
+		if err != nil {
+			msg := fmt.Sprintf("Error verifying block %d: cannot decode public key %s", height, dbb.SignaturePublicKeyHash)
+			log.Println(msg)
+			err = fmt.Errorf(msg)
+		}
+		hashBytes, err := hex.DecodeString(dbb.Hash)
+		if err != nil {
+			msg := fmt.Sprintf("Error verifying block %d: cannot decode hash %s", height, dbb.Hash)
+			log.Println(msg)
+			err = fmt.Errorf(msg)
+		}
+		err = cryptoVerifyBytes(creatorPublicKey, hashBytes, dbb.HashSignature)
+		if err != nil {
+			msg := fmt.Sprintf("Error verifying block %d: block hash signature is invalid (%s)", height, err)
+			log.Println(msg)
+			err = fmt.Errorf(msg)
+		}
+		previousHashBytes, err := hex.DecodeString(dbb.PreviousBlockHash)
+		if err != nil {
+			msg := fmt.Sprintf("Error verifying block %d: cannot decode previous block hash %s", height, dbb.PreviousBlockHash)
+			log.Println(msg)
+			err = fmt.Errorf(msg)
+		}
+		err = cryptoVerifyBytes(creatorPublicKey, previousHashBytes, dbb.PreviousBlockHashSignature)
+		if err != nil {
+			msg := fmt.Sprintf("Error verifying block %d: previous block hash signature is invalid (%s)", height, err)
+			log.Println(msg)
+			err = fmt.Errorf(msg)
+		}
+		b, err := OpenBlockByHeight(height)
+		if err != nil {
+			msg := fmt.Sprintf("Error verifying block %d: cannot open block db file: %s", height, err)
+			log.Println(msg)
+			err = fmt.Errorf(msg)
+			continue
+		}
+		blockKeyOps, err := b.dbGetKeyOps()
+		if err != nil {
+			msg := fmt.Sprintf("Error verifying block %d: cannot get key ops: %s", height, err)
+			log.Println(msg)
+			err = fmt.Errorf(msg)
+		}
+		Q := QuorumForHeight(height)
+		for keyOpKeyHash, keyOps := range blockKeyOps {
+			if len(keyOps) != Q {
+				msg := fmt.Sprintf("Error verifying block %d: key ops for %s don't have quorum: %d vs Q=%d", height, keyOpKeyHash, len(keyOps), Q)
+				log.Println(msg)
+				err = fmt.Errorf(msg)
+			}
+			op := keyOps[0].op
+			for _, kop := range keyOps {
+				if kop.op != op {
+					msg := fmt.Sprintf("Error verifying block %d: key ops for %s don't match: %s vs %s", height, keyOpKeyHash, kop.op, op)
+					log.Println(msg)
+					err = fmt.Errorf(msg)
+				}
+				dbSigningKey, err := dbGetPublicKey(kop.signatureKeyHash)
+				if err != nil {
+					msg := fmt.Sprintf("Error verifying block %d: cannot get public key %s from main db", height, kop.signatureKeyHash)
+					log.Println(msg)
+					err = fmt.Errorf(msg)
+				}
+				signingKey, err := cryptoDecodePublicKeyBytes(dbSigningKey.publicKeyBytes)
+				if err != nil {
+					msg := fmt.Sprintf("Error verifying block %d: cannot decode public key %s", height, dbSigningKey.publicKeyHash)
+					log.Println(msg)
+					err = fmt.Errorf(msg)
+				}
+				if err = cryptoVerifyPublicKeyHashSignature(signingKey, kop.publicKeyHash, kop.signature); err != nil {
+					msg := fmt.Sprintf("Error verifying block %d: key op signature invalid for signer %s: %s", height, kop.signatureKeyHash, err)
+					log.Println(msg)
+					err = fmt.Errorf(msg)
+				}
+			}
+		}
+	}
+	return err
+}
+
+// QuorumForHeight calculates the required key op quorum for the given block height
+func QuorumForHeight(h int) int {
+	if h < 149 {
+		return 1
+	}
+	return int(math.Log(float64(h)) * 2)
 }
 
 // OpenBlockByHeight opens a block stored in the blockchain at the given height
@@ -129,30 +272,24 @@ func ReadBlockFromFile(fileName string) (*Block, error) {
 	}
 	defer db.Close()
 	b := Block{DbBlockchainBlock: &DbBlockchainBlock{Hash: hash}, db: db}
-	b.Version, err = b.dbGetMetaInt("Version")
-	if err != nil {
+	if b.Version, err = b.dbGetMetaInt("Version"); err != nil {
 		return nil, err
 	}
-	b.PreviousBlockHash, err = b.dbGetMetaString("PreviousBlockHash")
-	if err != nil {
+	if b.PreviousBlockHash, err = b.dbGetMetaString("PreviousBlockHash"); err != nil {
 		return nil, err
 	}
-	b.SignaturePublicKeyHash, err = b.dbGetMetaString("CreatorPublicKey")
-	if err != nil {
+	if b.SignaturePublicKeyHash, err = b.dbGetMetaString("CreatorPublicKey"); err != nil {
 		return nil, err
 	}
-	b.PreviousBlockHashSignature, err = b.dbGetMetaHexBytes("PreviousBlockHashSignature")
-	if err != nil {
+	if b.PreviousBlockHashSignature, err = b.dbGetMetaHexBytes("PreviousBlockHashSignature"); err != nil {
 		return nil, err
 	}
-
 	return &b, nil
 }
 
 func (b *Block) dbGetMetaInt(key string) (int, error) {
 	var value string
-	err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value)
-	if err != nil {
+	if err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value); err != nil {
 		return -1, err
 	}
 	return strconv.Atoi(value)
@@ -160,8 +297,7 @@ func (b *Block) dbGetMetaInt(key string) (int, error) {
 
 func (b *Block) dbGetMetaString(key string) (string, error) {
 	var value string
-	err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value)
-	if err != nil {
+	if err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value); err != nil {
 		return "", err
 	}
 	return value, nil
@@ -169,9 +305,55 @@ func (b *Block) dbGetMetaString(key string) (string, error) {
 
 func (b *Block) dbGetMetaHexBytes(key string) ([]byte, error) {
 	var value string
-	err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value)
-	if err != nil {
+	if err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value); err != nil {
 		return nil, err
 	}
 	return hex.DecodeString(value)
+}
+
+func (b *Block) dbGetKeyOps() (map[string][]BlockKeyOp, error) {
+	var count int
+	if err := b.db.QueryRow("SELECT COUNT(*) FROM _keys").Scan(&count); err != nil {
+		return nil, err
+	}
+	keyOps := make(map[string][]BlockKeyOp)
+	rows, err := b.db.Query("SELECT op, pubkey_hash, pubkey, sigkey_hash, signature, COALESCE(metadata, '') FROM _keys")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var publicKeyHex string
+		var signatureHex string
+		var metadataJSON string
+		var keyOp BlockKeyOp
+		if err := rows.Scan(&keyOp.op, &keyOp.publicKeyHash, &publicKeyHex, &keyOp.signatureKeyHash, &signatureHex, &metadataJSON); err != nil {
+			return nil, err
+		}
+		if keyOp.publicKeyBytes, err = hex.DecodeString(publicKeyHex); err != nil {
+			return nil, err
+		}
+		publicKey, err := cryptoDecodePublicKeyBytes(keyOp.publicKeyBytes)
+		if err != nil {
+			return nil, err
+		}
+		if keyOp.publicKeyHash != cryptoMustGetPublicKeyHash(publicKey) {
+			return nil, fmt.Errorf("Public key hash doesn't match for %s", keyOp.publicKeyHash)
+		}
+		if keyOp.signature, err = hex.DecodeString(signatureHex); err != nil {
+			return nil, err
+		}
+		if metadataJSON != "" {
+			if err = json.Unmarshal([]byte(metadataJSON), keyOp.metadata); err != nil {
+				return nil, err
+			}
+		}
+		if _, ok := keyOps[keyOp.publicKeyHash]; ok {
+			keyOps[keyOp.publicKeyHash] = append(keyOps[keyOp.publicKeyHash], keyOp)
+		} else {
+			keyOps[keyOp.publicKeyHash] = make([]BlockKeyOp, 1)
+			keyOps[keyOp.publicKeyHash][0] = keyOp
+		}
+	}
+	return keyOps, nil
 }

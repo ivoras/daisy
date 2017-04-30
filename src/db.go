@@ -43,17 +43,6 @@ CREATE TABLE blockchain (
 CREATE INDEX blockchain_sigkey_hash ON blockchain(sigkey_hash);
 `
 
-const myKeysTableCreate = `
-CREATE TABLE pubkeys (
-	pubkey_hash		VARCHAR NOT NULL PRIMARY KEY,
-	pubkey			VARCHAR NOT NULL,
-	state			CHAR NOT NULL,
-	time_added		INTEGER NOT NULL,
-	time_revoked	INTEGER,
-	metadata		VARCHAR -- JSON
-);
-`
-
 // DbPubKey is the convenience structure holding information from the pubkeys table
 type DbPubKey struct {
 	publicKeyHash  string
@@ -62,8 +51,21 @@ type DbPubKey struct {
 	timeAdded      time.Time
 	isRevoked      bool
 	timeRevoked    time.Time
+	addBlockHeight int
 	metadata       map[string]string
 }
+
+const myKeysTableCreate = `
+CREATE TABLE pubkeys (
+	pubkey_hash		VARCHAR NOT NULL PRIMARY KEY,
+	pubkey			VARCHAR NOT NULL,
+	state			CHAR NOT NULL,
+	time_added		INTEGER NOT NULL,
+	time_revoked	INTEGER,
+	block_height	INTEGER NOT NULL,
+	metadata		VARCHAR -- JSON
+);
+`
 
 const privateTableCreate = `
 CREATE TABLE privkeys (
@@ -136,17 +138,26 @@ func assertSysDbOpen() {
 	}
 }
 
-func dbWritePublicKey(pubkey []byte, hash string) {
-	_, err := mainDb.Exec("INSERT INTO pubkeys(pubkey_hash, pubkey, state, time_added) VALUES (?, ?, ?, ?)", hash, hex.EncodeToString(pubkey), "A", time.Now().Unix())
+func dbPublicKeyExists(hash string) bool {
+	var count int
+	if err := mainDb.QueryRow("SELECT COUNT(*) FROM pubkeys WHERE pubkey_hash=?", hash).Scan(&count); err != nil {
+		log.Panicln(err)
+	}
+	return count > 0
+}
+
+func dbWritePublicKey(pubkey []byte, hash string, blockHeight int) {
+	_, err := mainDb.Exec("INSERT INTO pubkeys(pubkey_hash, pubkey, state, time_added, block_height) VALUES (?, ?, ?, ?, ?)",
+		hash, hex.EncodeToString(pubkey), "A", time.Now().Unix(), blockHeight)
 	if err != nil {
-		log.Fatal(err)
+		log.Panicln(err)
 	}
 }
 
 func dbWritePrivateKey(privkey []byte, hash string) {
 	_, err := privateDb.Exec("INSERT INTO privkeys(pubkey_hash, privkey, time_added) VALUES (?, ?, ?)", hash, hex.EncodeToString(privkey), time.Now().Unix())
 	if err != nil {
-		log.Fatal(err)
+		log.Panicln(err)
 	}
 }
 
@@ -184,8 +195,8 @@ func dbGetPublicKey(publicKeyHash string) (*DbPubKey, error) {
 	var timeAdded int
 	var timeRevoked int
 	var metadata string
-	err := mainDb.QueryRow("SELECT pubkey_hash, pubkey, state, time_added, COALESCE(time_revoked, -1), COALESCE(metadata, '') FROM pubkeys WHERE pubkey_hash=?", publicKeyHash).Scan(
-		&dbpk.publicKeyHash, &publicKeyHexString, &dbpk.state, &timeAdded, &timeRevoked, &metadata)
+	err := mainDb.QueryRow("SELECT pubkey_hash, pubkey, state, time_added, COALESCE(time_revoked, -1), COALESCE(metadata, ''), block_height FROM pubkeys WHERE pubkey_hash=?", publicKeyHash).Scan(
+		&dbpk.publicKeyHash, &publicKeyHexString, &dbpk.state, &timeAdded, &timeRevoked, &metadata, &dbpk.addBlockHeight)
 	if err != nil && err != sql.ErrNoRows {
 		log.Panicln(err)
 	}

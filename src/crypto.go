@@ -23,12 +23,12 @@ type ecdsaSignature struct {
 func cryptoInit() {
 	if dbNumPrivateKeys() == 0 {
 		log.Println("Generating the default private key...")
-		generatePrivateKey()
+		generatePrivateKey(-1)
 		log.Println("Generated.")
 	}
 }
 
-func generatePrivateKey() *ecdsa.PrivateKey {
+func generatePrivateKey(height int) *ecdsa.PrivateKey {
 	keys, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		log.Fatal(err)
@@ -43,7 +43,7 @@ func generatePrivateKey() *ecdsa.PrivateKey {
 	}
 	publicKeyHash := getPubKeyHash(publicKey)
 
-	dbWritePublicKey(publicKey, publicKeyHash)
+	dbWritePublicKey(publicKey, publicKeyHash, height)
 	dbWritePrivateKey(privateKey, publicKeyHash)
 
 	return keys
@@ -114,8 +114,13 @@ func getAPrivateKey() (*ecdsa.PrivateKey, error) {
 	return keys, nil
 }
 
-func cryptoMustGetPublicKeyHash(keypair *ecdsa.PrivateKey) string {
-	publicKeyBytes, err := x509.MarshalPKIXPublicKey(&keypair.PublicKey)
+func cryptoDecodePublicKeyBytes(key []byte) (*ecdsa.PublicKey, error) {
+	ikey, err := x509.ParsePKIXPublicKey(key)
+	return ikey.(*ecdsa.PublicKey), err
+}
+
+func cryptoMustGetPublicKeyHash(key *ecdsa.PublicKey) string {
+	publicKeyBytes, err := x509.MarshalPKIXPublicKey(key)
 	if err != nil {
 		log.Fatalln(err)
 	}
