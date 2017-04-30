@@ -85,7 +85,7 @@ func blockchainInit() {
 		}
 		genesisBlockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, 0)
 		ioutil.WriteFile(genesisBlockFilename, genesisBlock, 0644)
-		b, err := ReadBlockFromFile(genesisBlockFilename)
+		b, err := OpenBlockFile(genesisBlockFilename)
 		if err != nil {
 			log.Panicln(err)
 		}
@@ -261,7 +261,7 @@ func OpenBlockByHeight(height int) (*Block, error) {
 
 // ReadBlockFromFile reads block metadata from the given database file.
 // Note that it will not fill-in all the fields. Notable, height is not stored in tje block db's metadata.
-func ReadBlockFromFile(fileName string) (*Block, error) {
+func OpenBlockFile(fileName string) (*Block, error) {
 	hash, err := hashFileToHexString(fileName)
 	if err != nil {
 		return nil, err
@@ -270,7 +270,6 @@ func ReadBlockFromFile(fileName string) (*Block, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
 	b := Block{DbBlockchainBlock: &DbBlockchainBlock{Hash: hash}, db: db}
 	if b.Version, err = b.dbGetMetaInt("Version"); err != nil {
 		return nil, err
@@ -314,6 +313,7 @@ func (b *Block) dbGetMetaHexBytes(key string) ([]byte, error) {
 func (b *Block) dbGetKeyOps() (map[string][]BlockKeyOp, error) {
 	var count int
 	if err := b.db.QueryRow("SELECT COUNT(*) FROM _keys").Scan(&count); err != nil {
+		log.Println("awww, shucks.")
 		return nil, err
 	}
 	keyOps := make(map[string][]BlockKeyOp)
