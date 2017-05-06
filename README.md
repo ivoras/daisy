@@ -4,7 +4,11 @@
 
 What if there is a blockchain where only certain nodes, in possession of one of accepted private keys, can add data to a blockchain, whose blocks are (SQLite) databases, and if those nodes can accept new ones into their ranks by signing the candidate's keys in a web-of-trust style?
 
-What if Wikipedia was distributed in this way...?
+What if public (government) documents were distributed in this way...? What if Wikipedia was...?
+
+# Current status
+
+Basic crypto, block and db operations are implemented, the network part is still pending.
 
 ## Design notes
 
