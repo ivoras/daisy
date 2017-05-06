@@ -80,27 +80,27 @@ func hashFileToHexString(fileName string) (string, error) {
 }
 
 // getAPrivateKey returns a random keypair read from the database
-func getAPrivateKey() (*ecdsa.PrivateKey, error) {
+func cryptoGetAPrivateKey() (*ecdsa.PrivateKey, string, error) {
 	privateKeyBytes, publicKeyHash, err := dbGetAPrivateKey()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	dbPubKey, err := dbGetPublicKey(publicKeyHash)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	keys, err := x509.ParseECPrivateKey(privateKeyBytes)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	pubKey, err := x509.ParsePKIXPublicKey(dbPubKey.publicKeyBytes)
 	if err != nil {
 		log.Panicln(err)
-		return nil, err
+		return nil, "", err
 	}
 	keys.PublicKey = *pubKey.(*ecdsa.PublicKey)
 	if !elliptic.P256().IsOnCurve(keys.PublicKey.X, keys.PublicKey.Y) {
-		return nil, fmt.Errorf("Elliptic key verification error for %s", publicKeyHash)
+		return nil, "", fmt.Errorf("Elliptic key verification error for %s", publicKeyHash)
 	}
 
 	// Check if we can get the right public key hash back again
@@ -110,10 +110,10 @@ func getAPrivateKey() (*ecdsa.PrivateKey, error) {
 	}
 	testPublicKeyHash := getPubKeyHash(testPublicKeyBytes)
 	if testPublicKeyHash != publicKeyHash {
-		return nil, fmt.Errorf("Loaded keypair %s, but the calculated public key hash doesn't match: %s", publicKeyHash, testPublicKeyHash)
+		return nil, "", fmt.Errorf("Loaded keypair %s, but the calculated public key hash doesn't match: %s", publicKeyHash, testPublicKeyHash)
 	}
 
-	return keys, nil
+	return keys, publicKeyHash, nil
 }
 
 func cryptoDecodePublicKeyBytes(key []byte) (*ecdsa.PublicKey, error) {
@@ -152,12 +152,36 @@ func cryptoVerifyPublicKeyHashSignature(publicKey *ecdsa.PublicKey, publicKeyHas
 	return cryptoVerifyBytes(publicKey, publicKeyHashBytes, signature)
 }
 
-func cryptoSignBytes(myPrivateKey *ecdsa.PrivateKey, data []byte) ([]byte, error) {
+func cryptoSignHex(myPrivateKey *ecdsa.PrivateKey, hash string) (string, error) {
+	hashBytes, err := hex.DecodeString(hash)
+	if err != nil {
+		return "", err
+	}
+	signatureBytes, err := cryptoSignBytes(myPrivateKey, hashBytes)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(signatureBytes), nil
+}
+
+func cryptoVerifyHex(publicKey *ecdsa.PublicKey, hash string, signature string) error {
+	hashBytes, err := hex.DecodeString(hash)
+	if err != nil {
+		return err
+	}
+	signatureBytes, err := hex.DecodeString(signature)
+	if err != nil {
+		return err
+	}
+	return cryptoVerifyBytes(publicKey, hashBytes, signatureBytes)
+}
+
+func cryptoSignBytes(myPrivateKey *ecdsa.PrivateKey, hash []byte) ([]byte, error) {
 	var sig ecdsaSignature
 	var err error
 	var signature []byte
 	for {
-		sig.R, sig.S, err = ecdsa.Sign(rand.Reader, myPrivateKey, data)
+		sig.R, sig.S, err = ecdsa.Sign(rand.Reader, myPrivateKey, hash)
 		signature, err = asn1.Marshal(sig)
 		if err != nil {
 			return nil, err

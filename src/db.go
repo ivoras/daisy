@@ -12,6 +12,10 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+/*********************************************************************************************************************
+ * Structures and SQL schema for the system tables
+ */
+
 const mainDbFileName = "daisy.db"
 const privateDbFilename = "private.db"
 
@@ -32,7 +36,7 @@ type DbBlockchainBlock struct {
 const blockchainTableCreate = `
 CREATE TABLE blockchain (
 	height				INTEGER NOT NULL UNIQUE,
-	sigkey_hash			VARCHAR NOT NULL, -- public key hash of the block creator
+	sigkey_hash			VARCHAR NOT NULL,
 	hash				VARCHAR NOT NULL PRIMARY KEY,
 	hash_signature		VARCHAR NOT NULL,
 	prev_hash			VARCHAR NOT NULL,
@@ -64,14 +68,35 @@ CREATE TABLE pubkeys (
 	time_revoked	INTEGER,
 	block_height	INTEGER NOT NULL,
 	metadata		VARCHAR -- JSON
-);
-`
+);`
 
 const privateTableCreate = `
 CREATE TABLE privkeys (
 	pubkey_hash		VARCHAR NOT NULL PRIMARY KEY,
 	privkey			VARCHAR NOT NULL,
 	time_added		INTEGER NOT NULL
+);
+`
+
+/*********************************************************************************************************************
+ * Structures and SQL schema for the blockchain block tables.
+ */
+const metaTableCreate = `
+CREATE TABLE _meta (
+    key         VARCHAR NOT NULL PRIMARY KEY,
+    value       VARCHAR
+);
+`
+
+const keysTableCreate = `
+CREATE TABLE _keys (
+    op              CHAR NOT NULL,
+    pubkey_hash     VARCHAR NOT NULL,
+    pubkey          VARCHAR NOT NULL,
+    sigkey_hash     VARCHAR NOT NULL,
+    signature       VARCHAR NOT NULL,
+    metadata        VARCHAR,
+    PRIMARY KEY (pubkey_hash, sigkey_hash)
 );
 `
 
@@ -130,6 +155,15 @@ func dbNumPrivateKeys() int {
 		log.Fatal(err)
 	}
 	return count
+}
+
+func dbTableExists(db *sql.DB, name string) bool {
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&count)
+	if err != nil {
+		log.Panicln(err)
+	}
+	return count > 0
 }
 
 func assertSysDbOpen() {
@@ -263,6 +297,6 @@ func dbGetBlockByHeight(height int) (*DbBlockchainBlock, error) {
 func dbInsertBlock(dbb *DbBlockchainBlock) error {
 	_, err := mainDb.Exec("INSERT INTO blockchain (hash, height, prev_hash, sigkey_hash, hash_signature, prev_hash_signature, time_accepted, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 		dbb.Hash, dbb.Height, dbb.PreviousBlockHash, dbb.SignaturePublicKeyHash, hex.EncodeToString(dbb.HashSignature), hex.EncodeToString(dbb.PreviousBlockHashSignature),
-		dbb.TimeAccepted.Unix(), dbb.Version)
+		dbb.TimeAccepted.UTC().Unix(), dbb.Version)
 	return err
 }

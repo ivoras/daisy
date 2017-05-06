@@ -10,5 +10,8 @@ func main() {
 	dbInit()
 	cryptoInit()
 	blockchainInit()
+	if processActions() {
+		return
+	}
 	go p2pServer()
 }
