@@ -26,7 +26,7 @@ const GenesisBlockHash = "9a0ff19183d1525a36de803047de4b73eb72506be8c81296eb4634
 const GenesisBlockHashSignature = "30460221008b8b3b3cfee2493ef58f2f6a1f1768b564f4c9e9a341ad42912cbbcf5c3ec82f022100fbcdfd0258fa1a5b073d18f688c2fb3d8f9a7c59204c6777f2bbf1faeb1eb1ed"
 
 // GenesisBlockTimestamp is the timestamp of the genesis block
-const GenesisBlockTimestamp = "Sun, 30 Apr 2017 10:14:28 +0200"
+const GenesisBlockTimestamp = "Sat, 06 May 2017 10:38:50 +0200"
 
 const blockchainSubdirectoryName = "blocks"
 const blockFilenameFormat = "%s/block_%08d.db"
