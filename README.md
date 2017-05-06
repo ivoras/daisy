@@ -1,11 +1,18 @@
 # Daisy - a blockchain where blocks are SQLite databases
 
+# What if...
+
+What if there is a blockchain where only certain nodes, in possession of one of accepted private keys, can add data to a blockchain, whose blocks are (SQLite) databases, and if those nodes can accept new ones into their ranks by signing the candidate's keys in a web-of-trust style?
+
+What if Wikipedia was distributed in this way...?
+
 ## Design notes
 
 *Note:* All this is fluid and can be changed as development progresses.
 
-* Block payloads are SQLite database files. Opened read-only for use, of course.
-* Blockchain metadata is mostly separate from the block payloads, with the notable exception of the previous block hash (merkle).
+* Everyone can download the blockchain, only special "miners" can create ones, in a sort-of web-of-trust way.
+* Block payloads are SQLite database files. Except for special metadata tables, their content is not enforced.
+* Blockchain metadata is mostly separate from the block payloads, with some obvious exceptions such as the block hash. Metadata critical for blockchain integrity (like the previous block's hash (merkle)is within the block database)
 * Consensus rules:
     * The validity of the SQLite files
     * The presence of a special tables named `_meta` and `keys`,
@@ -18,9 +25,9 @@
 
 ## How blocks are created
 
-Blocks are SQLite database files. Every party in posession of an accepted private key can create new blocks and sign them. Blocks are accepted (if other criteria are satisfied) only if they are signed by one of the accepted keys.
+Blocks are SQLite database files. Every party in posession of an *accepted private key* can create new blocks and sign them. Blocks are accepted (if other criteria are satisfied) only if they are signed by one of the accepted keys.
 
-New blocks can contain operations which add or remove keys from a (global) list of accepted keys. See the `_keys` table description in the section on Block metadata.
+New blocks can contain operations which add or remove keys from a (global) list of accepted keys, if they contain a sufficient number of signatures from a list of already accepted keys. See the `_keys` table description in the section on Block metadata.
 
 ## Block metadata
 
