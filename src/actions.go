@@ -40,7 +40,7 @@ func actionSignImportBlock(fn string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err = dbSetMeta(db, "Version", strconv.Itoa(blockchainBlockVersion)); err != nil {
+	if err = dbSetMeta(db, "Version", strconv.Itoa(CurrentBlockVersion)); err != nil {
 		log.Panic(err)
 	}
 	dbSetMeta(db, "PreviousBlockHash", dbb.Hash)
@@ -73,7 +73,7 @@ func actionSignImportBlock(fn string) {
 
 	newBlockHeight := lastBlockHeight + 1
 	newBlock := DbBlockchainBlock{Hash: blockHashHex, HashSignature: blockHashSignature, PreviousBlockHash: dbb.Hash, PreviousBlockHashSignature: previousBlockHashSignature,
-		Version: blockchainBlockVersion, SignaturePublicKeyHash: pkdb.publicKeyHash, Height: newBlockHeight, TimeAccepted: time.Now()}
+		Version: CurrentBlockVersion, SignaturePublicKeyHash: pkdb.publicKeyHash, Height: newBlockHeight, TimeAccepted: time.Now()}
 
 	err = dbInsertBlock(&newBlock)
 	if err != nil {

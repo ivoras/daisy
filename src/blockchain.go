@@ -32,8 +32,6 @@ const GenesisBlockTimestamp = "Sat, 06 May 2017 10:38:50 +0200"
 const blockchainSubdirectoryName = "blocks"
 const blockFilenameFormat = "%s/block_%08d.db"
 
-const blockchainBlockVersion = 1
-
 var blockchainSubdirectory string
 
 /*
@@ -306,7 +304,7 @@ func OpenBlockByHeight(height int) (*Block, error) {
 	return &b, nil
 }
 
-// ReadBlockFromFile reads block metadata from the given database file.
+// OpenBlockFile reads block metadata from the given database file.
 // Note that it will not fill-in all the fields. Notable, height is not stored in tje block db's metadata.
 func OpenBlockFile(fileName string) (*Block, error) {
 	hash, err := hashFileToHexString(fileName)
