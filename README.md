@@ -39,7 +39,9 @@ New blocks can contain operations which add or remove keys from a (global) list 
 
 This table contains key operations for block creators. Keys can be either accepted or revoked. It is invalid for a `_keys` table to contain both acceptance and revocation records for a single key. Both acceptance and revocation operations require a quorum, where Q different keys which are already accepted sign the hash of the key in question. The number Q is calculated as:
 
-> Q = 1 if H  < 149 else floor(log(H)*2)
+```
+  Q = 1 if H  < 149 else floor(log(H)*2)
+```
 
 Where `H` is the block height of the block containing these records.
 
@@ -47,21 +49,23 @@ For example, if `Q` is 3, to add a key `K` to the list of accepted keys, there m
 
 A table of quorums required for specific block heights is:
 
->   1   1
->   149 10
->   245 11
->   404 12
->   666 13
->   1097 14
->   1809 15
->   2981 16
->   4915 17
->   8104 18
->   13360 19
->   22027 20
->   36316 21
->   59875 22
->   98716 23
->   162755 24
+```
+  1   1
+  149 10
+  245 11
+  404 12
+  666 13
+  1097 14
+  1809 15
+  2981 16
+  4915 17
+  8104 18
+  13360 19
+  22027 20
+  36316 21
+  59875 22
+  98716 23
+  162755 24
+```
 
 E.g. for block 100000, 23 signatures are required to accept a new signature.
