@@ -15,6 +15,8 @@ import (
 	"os"
 )
 
+var bigIntZero = big.NewInt(0)
+
 type ecdsaSignature struct {
 	R *big.Int
 	S *big.Int
@@ -153,10 +155,16 @@ func cryptoVerifyPublicKeyHashSignature(publicKey *ecdsa.PublicKey, publicKeyHas
 func cryptoSignBytes(myPrivateKey *ecdsa.PrivateKey, data []byte) ([]byte, error) {
 	var sig ecdsaSignature
 	var err error
-	sig.R, sig.S, err = ecdsa.Sign(rand.Reader, myPrivateKey, data)
-	signature, err := asn1.Marshal(sig)
-	if err != nil {
-		return nil, err
+	var signature []byte
+	for {
+		sig.R, sig.S, err = ecdsa.Sign(rand.Reader, myPrivateKey, data)
+		signature, err = asn1.Marshal(sig)
+		if err != nil {
+			return nil, err
+		}
+		if sig.R.Cmp(bigIntZero) != 0 {
+			break
+		}
 	}
 	return signature, nil
 }

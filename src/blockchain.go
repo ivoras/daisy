@@ -16,11 +16,14 @@ import (
 // CurrentBlockVersion is the version of the block metadata
 const CurrentBlockVersion = 1
 
+// GenesisBlockPreviousBlockHash is the hard-coded canonical stand-in hash of the non-existent previous block
+const GenesisBlockPreviousBlockHash = "1000000000000000000000000000000000000000000000000000000000000001"
+
 // GenesisBlockHash is the SHA256 hash of the genesis block payload
-const GenesisBlockHash = "8cee737a33962b419060a10213b8963e3e52cbac9beabf2004c4b2bc9cc900ca"
+const GenesisBlockHash = "9a0ff19183d1525a36de803047de4b73eb72506be8c81296eb463476a5c2d9e2"
 
 // GenesisBlockHashSignature is the signature of the genesis block's hash, with the key in the genesis block
-const GenesisBlockHashSignature = "30450220225f84a2cd13f20c24c0d010bcf51bde3395c1e7409e78cff1271fb2b074f08a022100b077fbf3cd296015772182065c8ca94558fbd7afd1b7ea619197ed4c5e0dc26f"
+const GenesisBlockHashSignature = "30460221008b8b3b3cfee2493ef58f2f6a1f1768b564f4c9e9a341ad42912cbbcf5c3ec82f022100fbcdfd0258fa1a5b073d18f688c2fb3d8f9a7c59204c6777f2bbf1faeb1eb1ed"
 
 // GenesisBlockTimestamp is the timestamp of the genesis block
 const GenesisBlockTimestamp = "Sun, 30 Apr 2017 10:14:28 +0200"
@@ -73,16 +76,40 @@ func blockchainInit() {
 		if err = cryptoVerifyPublicKeyHashSignature(&keypair.PublicKey, publicKeyHash, signature); err != nil {
 			log.Panicln(err)
 		}
-		signature, err = cryptoSignBytes(keypair, make([]byte, 0)) // empty array signature
-		if err != nil {
-			log.Panicln(err)
-		}
+
+		/*
+			// Sign the Genesis block's "previous block" hash
+			genesisPrevBlockHash, err := hex.DecodeString(GenesisBlockPreviousBlockHash)
+			if err != nil {
+				log.Panicln(err)
+			}
+			signature, err = cryptoSignBytes(keypair, genesisPrevBlockHash)
+			if err != nil {
+				log.Panicln(err)
+			}
+			log.Println(GenesisBlockPreviousBlockHash)
+			log.Println(hex.EncodeToString(signature))
+		*/
 
 		// Bring the genesis block into existence
 		genesisBlock := MustAsset("bindata/genesis.db")
 		if hashBytesToHexString(genesisBlock) != GenesisBlockHash {
-			log.Panicln("Genesis block hash unexpected")
+			log.Panicln("Genesis block hash unexpected:", hashBytesToHexString(genesisBlock))
 		}
+
+		/*
+			// Sign the Genesis block's hash
+			genesisBlockHash, err := hex.DecodeString(GenesisBlockHash)
+			if err != nil {
+				log.Panicln(err)
+			}
+			signature, err = cryptoSignBytes(keypair, genesisBlockHash)
+			if err != nil {
+				log.Panicln(err)
+			}
+			log.Println(hex.EncodeToString(signature))
+		*/
+
 		genesisBlockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, 0)
 		ioutil.WriteFile(genesisBlockFilename, genesisBlock, 0644)
 		b, err := OpenBlockFile(genesisBlockFilename)
@@ -139,6 +166,11 @@ func blockchainVerifyEverything() error {
 		}
 		if fileHash != dbb.Hash {
 			msg := fmt.Sprintf("Error verifying block %d: file hash %s doesn't match db hash %s", height, fileHash, dbb.Hash)
+			log.Println(msg)
+			err = fmt.Errorf(msg)
+		}
+		if height == 0 && fileHash != GenesisBlockHash {
+			msg := fmt.Sprintf("Error verifying block %d: it's supposed to be the genesis block but its hash doesn't match %s", height, GenesisBlockHash)
 			log.Println(msg)
 			err = fmt.Errorf(msg)
 		}
