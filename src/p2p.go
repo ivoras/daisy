@@ -64,7 +64,7 @@ func p2pServer() {
 }
 
 func p2pClient() {
-
+	// Read the list of (old) peers from the db
 }
 
 func (p2pc *p2pConnection) handleConnection() {
