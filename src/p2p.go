@@ -6,9 +6,10 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"time"
 )
 
-const p2pClientid = "godaisy/1.0"
+const p2pClientIDString = "godaisy/1.0"
 
 const msgHello = "hello"
 
@@ -19,6 +20,25 @@ var bootstrapPeers = []string{
 
 type p2pConnection struct {
 	conn net.Conn
+}
+
+type p2pPeersSet struct {
+	peers map[*p2pConnection]time.Time
+	lock  WithMutex
+}
+
+var p2pPeers = p2pPeersSet{peers: make(map[*p2pConnection]time.Time)}
+
+func (p *p2pPeersSet) Add(c *p2pConnection) {
+	p.lock.With(func() {
+		p.peers[c] = time.Now()
+	})
+}
+
+func (p *p2pPeersSet) Remove(c *p2pConnection) {
+	p.lock.With(func() {
+		delete(p.peers, c)
+	})
 }
 
 func p2pServer() {
@@ -38,8 +58,13 @@ func p2pServer() {
 			return
 		}
 		p2pc := p2pConnection{conn: conn}
+		p2pPeers.Add(&p2pc)
 		go p2pc.handleConnection()
 	}
+}
+
+func p2pClient() {
+
 }
 
 func (p2pc *p2pConnection) handleConnection() {
@@ -47,7 +72,7 @@ func (p2pc *p2pConnection) handleConnection() {
 	peer := bufio.NewReadWriter(bufio.NewReader(p2pc.conn), bufio.NewWriter(p2pc.conn))
 	hellomsg := map[string]string{
 		"msg":          msgHello,
-		"client_id":    p2pClientid,
+		"client_id":    p2pClientIDString,
 		"chain_height": strconv.Itoa(dbGetBlockchainHeight()),
 	}
 	peer.Write(stringMap2JsonBytes(hellomsg))

@@ -7,8 +7,21 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
 	"time"
 )
+
+// WithMutex extends the Mutex type with the convenient .With(func) function
+type WithMutex struct {
+	sync.Mutex
+}
+
+// With executes the given function with the mutex locked
+func (m *WithMutex) With(f func()) {
+	m.Mutex.Lock()
+	f()
+	m.Mutex.Unlock()
+}
 
 func unixTimeStampToUTCTime(ts int) time.Time {
 	return time.Unix(int64(ts), 0)

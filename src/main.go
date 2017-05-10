@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 const (
@@ -17,6 +18,7 @@ type sysEventMessage struct {
 }
 
 var sysEventChannel = make(chan sysEventMessage, 5)
+var startTime = time.Now()
 
 func main() {
 	log.Println("Starting up...")
@@ -31,6 +33,7 @@ func main() {
 		return
 	}
 	go p2pServer()
+	go p2pClient()
 
 	for {
 		select {
