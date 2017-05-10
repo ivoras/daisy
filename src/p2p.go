@@ -12,6 +12,11 @@ const p2pClientid = "godaisy/1.0"
 
 const msgHello = "hello"
 
+var bootstrapPeers = []string{
+	"cosmos.ivoras.net:2017",
+	"fielder.ivoras.net:2017",
+}
+
 type p2pConnection struct {
 	conn net.Conn
 }
@@ -33,11 +38,11 @@ func p2pServer() {
 			return
 		}
 		p2pc := p2pConnection{conn: conn}
-		go p2pc.p2pHandleConnection()
+		go p2pc.handleConnection()
 	}
 }
 
-func (p2pc *p2pConnection) p2pHandleConnection() {
+func (p2pc *p2pConnection) handleConnection() {
 	defer p2pc.conn.Close()
 	peer := bufio.NewReadWriter(bufio.NewReader(p2pc.conn), bufio.NewWriter(p2pc.conn))
 	hellomsg := map[string]string{
@@ -51,21 +56,30 @@ func (p2pc *p2pConnection) p2pHandleConnection() {
 		if err != nil {
 			log.Panicln("Error reading data from", p2pc.conn, err)
 		}
-		var msg map[string]string
+		var msg map[string]interface{}
 		err = json.Unmarshal(line, &msg)
 		if err != nil {
 			log.Println("Cannot parse json", string(line), "from", p2pc.conn)
 			break
 		}
-		var cmd string
 		var ok bool
-		if cmd, ok = msg["msg"]; !ok {
+		var ii interface{}
+		if ii, ok = msg["msg"]; !ok {
 			log.Println("Unexpected message:", string(line))
 			break
 		}
+		var cmd string
+		if cmd, ok = ii.(string); !ok {
+			log.Println("Unexpected message:", string(line))
+		}
 		switch cmd {
 		case msgHello:
-			log.Println("Hello from", p2pc.conn)
+			p2pc.handleMsgHello(msg)
 		}
 	}
+}
+
+func (p2pc *p2pConnection) handleMsgHello(msg map[string]interface{}) {
+	log.Println("Hello from", p2pc.conn)
+
 }

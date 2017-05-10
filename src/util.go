@@ -14,6 +14,10 @@ func unixTimeStampToUTCTime(ts int) time.Time {
 	return time.Unix(int64(ts), 0)
 }
 
+func getNowUTC() int64 {
+	return time.Now().UTC().Unix()
+}
+
 func stringMap2JsonBytes(m map[string]string) []byte {
 	b, err := json.Marshal(m)
 	if err != nil {

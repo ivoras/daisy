@@ -59,7 +59,7 @@ type DbPubKey struct {
 	metadata       map[string]string
 }
 
-const myKeysTableCreate = `
+const pubKeysTableCreate = `
 CREATE TABLE pubkeys (
 	pubkey_hash		VARCHAR NOT NULL PRIMARY KEY,
 	pubkey			VARCHAR NOT NULL,
@@ -78,8 +78,22 @@ CREATE TABLE privkeys (
 );
 `
 
+const configTableCreate = `
+CREATE TABLE config (
+	key				VARCHAR NOT NULL PRIMARY KEY,
+	value			VARCHAR NOT NULL
+);
+`
+
+const peersTableCreate = `
+CREATE TABLE peers (
+	address			VARCHAR NOT NULL PRIMARY KEY,	-- in the format "address:port
+	time_added		INTEGER NOT NULL
+);
+`
+
 /*********************************************************************************************************************
- * Structures and SQL schema for the blockchain block tables.
+ * Structures and SQL schema for the individual blockchain block tables.
  */
 const metaTableCreate = `
 CREATE TABLE _meta (
@@ -111,15 +125,35 @@ func dbInit() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if !mainDbFileExists {
+	if !mainDbFileExists || !dbTableExists(mainDb, "blockchain") {
 		// Create system tables
 		_, err = mainDb.Exec(blockchainTableCreate)
 		if err != nil {
-			log.Fatal(err)
+			log.Panic(err)
 		}
-		_, err = mainDb.Exec(myKeysTableCreate)
+	}
+	if !dbTableExists(mainDb, "pubkeys") {
+		_, err = mainDb.Exec(pubKeysTableCreate)
 		if err != nil {
-			log.Fatal(err)
+			log.Panic(err)
+		}
+	}
+	if !dbTableExists(mainDb, "config") {
+		_, err = mainDb.Exec(configTableCreate)
+		if err != nil {
+			log.Panic(err)
+		}
+	}
+	if !dbTableExists(mainDb, "peers") {
+		_, err = mainDb.Exec(peersTableCreate)
+		if err != nil {
+			log.Panic(err)
+		}
+		for _, peer := range bootstrapPeers {
+			_, err = mainDb.Exec("INSERT INTO peers(address, time_added) VALUES (?, ?)", peer, getNowUTC())
+			if err != nil {
+				log.Panic(err)
+			}
 		}
 	}
 
