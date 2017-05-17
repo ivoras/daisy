@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"log"
+	"math/rand"
 	"net"
 	"strconv"
 	"time"
@@ -13,13 +14,20 @@ const p2pClientIDString = "godaisy/1.0"
 
 const msgHello = "hello"
 
-var bootstrapPeers = []string{
-	"cosmos.ivoras.net:2017",
-	"fielder.ivoras.net:2017",
+type peerStringMap map[string]time.Time
+
+var bootstrapPeers = peerStringMap{
+	"cosmos.ivoras.net:2017":  time.Now(),
+	"fielder.ivoras.net:2017": time.Now(),
 }
 
+var p2pCandidatePeers = peerStringMap{}
+
+var p2pEphemeralID = rand.Int63()
+
 type p2pConnection struct {
-	conn net.Conn
+	conn    net.Conn
+	address string // host:port
 }
 
 type p2pPeersSet struct {
@@ -57,7 +65,8 @@ func p2pServer() {
 			sysEventChannel <- sysEventMessage{event: eventQuit}
 			return
 		}
-		p2pc := p2pConnection{conn: conn}
+		p2pc := p2pConnection{conn: conn, address: conn.RemoteAddr().String()}
+		p2pCandidatePeers[p2pc.address] = time.Now()
 		p2pPeers.Add(&p2pc)
 		go p2pc.handleConnection()
 	}
@@ -65,6 +74,7 @@ func p2pServer() {
 
 func p2pClient() {
 	// Read the list of (old) peers from the db
+
 }
 
 func (p2pc *p2pConnection) handleConnection() {
@@ -79,7 +89,8 @@ func (p2pc *p2pConnection) handleConnection() {
 	for {
 		line, err := peer.ReadBytes('\n')
 		if err != nil {
-			log.Panicln("Error reading data from", p2pc.conn, err)
+			log.Println("Error reading data from", p2pc.conn, err)
+			break
 		}
 		var msg map[string]interface{}
 		err = json.Unmarshal(line, &msg)

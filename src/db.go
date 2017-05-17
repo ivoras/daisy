@@ -334,3 +334,22 @@ func dbInsertBlock(dbb *DbBlockchainBlock) error {
 		dbb.TimeAccepted.UTC().Unix(), dbb.Version)
 	return err
 }
+
+func dbGetSavedPeers() peerStringMap {
+	result := peerStringMap{}
+	rows, err := mainDb.Query("SELECT address, time_added FROM peers")
+	if err != nil {
+		log.Panic(err)
+	}
+	defer rows.Close()
+	var address string
+	var tm time.Time
+	for rows.Next() {
+		if err = rows.Scan(&address, &tm); err != nil {
+			log.Println(err)
+			continue
+		}
+		result[address] = tm
+	}
+	return result
+}
