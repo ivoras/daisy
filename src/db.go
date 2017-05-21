@@ -149,7 +149,7 @@ func dbInit() {
 		if err != nil {
 			log.Panic(err)
 		}
-		for _, peer := range bootstrapPeers {
+		for peer := range bootstrapPeers {
 			_, err = mainDb.Exec("INSERT INTO peers(address, time_added) VALUES (?, ?)", peer, getNowUTC())
 			if err != nil {
 				log.Panic(err)
