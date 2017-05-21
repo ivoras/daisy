@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -10,9 +11,21 @@ import (
 	"time"
 )
 
-const p2pClientIDString = "godaisy/1.0"
+const p2pClientVersionString = "godaisy/1.0"
 
-const msgHello = "hello"
+type p2pMsgHeader struct {
+	Root  string `json:"root"`
+	Msg   string `json:"msg"`
+	P2pID int64  `json:"p2p_id"`
+}
+
+const p2pMsgHello = "hello"
+
+type p2pMsgHelloStruct struct {
+	p2pMsgHeader
+	Version     string `json:"version"`
+	ChainHeight int    `json:"chain_height"`
+}
 
 type peerStringMap map[string]time.Time
 
@@ -23,11 +36,12 @@ var bootstrapPeers = peerStringMap{
 
 var p2pCandidatePeers = peerStringMap{}
 
-var p2pEphemeralID = rand.Int63()
+var p2pEphemeralID = rand.Int63() & 0xffffffffffff
 
 type p2pConnection struct {
 	conn    net.Conn
 	address string // host:port
+	peer    *bufio.ReadWriter
 }
 
 type p2pPeersSet struct {
@@ -77,17 +91,52 @@ func p2pClient() {
 
 }
 
+func (p2pc *p2pConnection) sendMsg(msg interface{}) error {
+	bmsg, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	n, err := p2pc.peer.Write(bmsg)
+	if err != nil {
+		return err
+	}
+	if n != len(bmsg) {
+		return fmt.Errorf("Didn't write entire message: %v vs %v", n, len(bmsg))
+	}
+	n, err = p2pc.peer.Write([]byte("\n"))
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return fmt.Errorf("Didn't write newline")
+	}
+	err = p2pc.peer.Flush()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (p2pc *p2pConnection) handleConnection() {
 	defer p2pc.conn.Close()
-	peer := bufio.NewReadWriter(bufio.NewReader(p2pc.conn), bufio.NewWriter(p2pc.conn))
-	hellomsg := map[string]string{
-		"msg":          msgHello,
-		"client_id":    p2pClientIDString,
-		"chain_height": strconv.Itoa(dbGetBlockchainHeight()),
+	p2pc.peer = bufio.NewReadWriter(bufio.NewReader(p2pc.conn), bufio.NewWriter(p2pc.conn))
+	helloMsg := p2pMsgHelloStruct{
+		p2pMsgHeader: p2pMsgHeader{
+			P2pID: p2pEphemeralID,
+			Root:  GenesisBlockHash,
+			Msg:   p2pMsgHello,
+		},
+		Version:     p2pClientVersionString,
+		ChainHeight: dbGetBlockchainHeight(),
 	}
-	peer.Write(stringMap2JsonBytes(hellomsg))
+	err := p2pc.sendMsg(helloMsg)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	log.Println("Handling connection", p2pc.conn)
 	for {
-		line, err := peer.ReadBytes('\n')
+		line, err := p2pc.peer.ReadBytes('\n')
 		if err != nil {
 			log.Println("Error reading data from", p2pc.conn, err)
 			break
@@ -98,24 +147,35 @@ func (p2pc *p2pConnection) handleConnection() {
 			log.Println("Cannot parse json", string(line), "from", p2pc.conn)
 			break
 		}
-		var ok bool
-		var ii interface{}
-		if ii, ok = msg["msg"]; !ok {
-			log.Println("Unexpected message:", string(line))
+
+		var root string
+		if root, err = siMapGetString(msg, "root"); err != nil {
+			log.Printf("Problem with chain root from  %v: %v", p2pc.conn, err)
 			break
 		}
+		if root != GenesisBlockHash {
+			log.Printf("Received message from %v for a different chain than mine (%s vs %s). Ignoring.", p2pc.conn, root, GenesisBlockHash)
+			continue
+		}
+
 		var cmd string
-		if cmd, ok = ii.(string); !ok {
-			log.Println("Unexpected message:", string(line))
+		if cmd, err = siMapGetString(msg, "msg"); err != nil {
+			log.Printf("Error with msg from %v: %v", p2pc.conn, err)
 		}
 		switch cmd {
-		case msgHello:
+		case p2pMsgHello:
 			p2pc.handleMsgHello(msg)
 		}
 	}
 }
 
-func (p2pc *p2pConnection) handleMsgHello(msg map[string]interface{}) {
-	log.Println("Hello from", p2pc.conn)
+func (p2pc *p2pConnection) handleMsgHello(rawMsg map[string]interface{}) {
+	var ver string
+	var err error
+	if ver, err = siMapGetString(rawMsg, "version"); err != nil {
+		log.Println(p2pc.conn, err)
+		return
+	}
+	log.Println("Hello from", p2pc.conn, ver)
 
 }

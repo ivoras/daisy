@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -37,6 +38,19 @@ func stringMap2JsonBytes(m map[string]string) []byte {
 		log.Panicln("Cannot json-ise the map:", err)
 	}
 	return b
+}
+
+func siMapGetString(m map[string]interface{}, key string) (string, error) {
+	var ok bool
+	var ii interface{}
+	if ii, ok = m[key]; !ok {
+		return "", fmt.Errorf("No '%s' key in map", key)
+	}
+	var val string
+	if val, ok = ii.(string); !ok {
+		return "", fmt.Errorf("The '%s' key in map is not a string", key)
+	}
+	return val, nil
 }
 
 // Returns a hex-encoded hash of the given byte slice

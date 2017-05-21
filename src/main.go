@@ -32,6 +32,7 @@ func main() {
 	if processActions() {
 		return
 	}
+	log.Printf("Ephemeral ID: %x\n", p2pEphemeralID)
 	go p2pServer()
 	go p2pClient()
 
