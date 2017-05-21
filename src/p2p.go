@@ -34,8 +34,6 @@ var bootstrapPeers = peerStringMap{
 	"fielder.ivoras.net:2017": time.Now(),
 }
 
-var p2pCandidatePeers = peerStringMap{}
-
 var p2pEphemeralID = rand.Int63() & 0xffffffffffff
 
 type p2pConnection struct {
@@ -80,15 +78,23 @@ func p2pServer() {
 			return
 		}
 		p2pc := p2pConnection{conn: conn, address: conn.RemoteAddr().String()}
-		p2pCandidatePeers[p2pc.address] = time.Now()
 		p2pPeers.Add(&p2pc)
 		go p2pc.handleConnection()
 	}
 }
 
 func p2pClient() {
-	// Read the list of (old) peers from the db
-
+	peers := dbGetSavedPeers()
+	for peer := range peers {
+		conn, err := net.Dial("tcp", peer)
+		if err != nil {
+			log.Println("Error connecting to", peer, err)
+			continue
+		}
+		p2pc := p2pConnection{conn: conn, address: peer}
+		p2pPeers.Add(&p2pc)
+		go p2pc.handleConnection()
+	}
 }
 
 func (p2pc *p2pConnection) sendMsg(msg interface{}) error {
@@ -177,5 +183,6 @@ func (p2pc *p2pConnection) handleMsgHello(rawMsg map[string]interface{}) {
 		return
 	}
 	log.Println("Hello from", p2pc.conn, ver)
+	dbSavePeer(p2pc.address)
 
 }

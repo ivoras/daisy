@@ -87,8 +87,8 @@ CREATE TABLE config (
 
 const peersTableCreate = `
 CREATE TABLE peers (
-	address			VARCHAR NOT NULL PRIMARY KEY,	-- in the format "address:port
-	time_added		INTEGER NOT NULL
+	address			VARCHAR NOT NULL PRIMARY KEY,	-- in the format "address:port", lowercase
+	time_added		INTEGER NOT NULL -- time last seen
 );
 `
 
@@ -202,7 +202,7 @@ func dbTableExists(db *sql.DB, name string) bool {
 
 func assertSysDbOpen() {
 	if mainDb == nil || privateDb == nil {
-		log.Fatal("Databases are not open")
+		log.Panic("Databases are not open")
 	}
 }
 
@@ -234,7 +234,7 @@ func dbGetBlockchainHeight() int {
 	var height int
 	err := mainDb.QueryRow("SELECT COALESCE(MAX(height), -1) FROM blockchain").Scan(&height)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	return height
 }
@@ -342,14 +342,21 @@ func dbGetSavedPeers() peerStringMap {
 		log.Panic(err)
 	}
 	defer rows.Close()
-	var address string
-	var tm time.Time
 	for rows.Next() {
-		if err = rows.Scan(&address, &tm); err != nil {
+		var tmInt int
+		var address string
+		if err = rows.Scan(&address, &tmInt); err != nil {
 			log.Println(err)
 			continue
 		}
-		result[address] = tm
+		result[address] = unixTimeStampToUTCTime(tmInt)
 	}
 	return result
+}
+
+func dbSavePeer(address string) {
+	_, err := mainDb.Exec("INSERT OR REPLACE INTO peers(address, time_added) VALUES (?, ?)", address, getNowUTC())
+	if err != nil {
+		log.Panic(err)
+	}
 }
