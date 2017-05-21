@@ -40,6 +40,7 @@ type p2pConnection struct {
 	conn    net.Conn
 	address string // host:port
 	peer    *bufio.ReadWriter
+	peerID  int64
 }
 
 type p2pPeersSet struct {
@@ -183,6 +184,30 @@ func (p2pc *p2pConnection) handleMsgHello(rawMsg map[string]interface{}) {
 		return
 	}
 	log.Println("Hello from", p2pc.conn, ver)
+	if p2pc.peerID == 0 {
+		if p2pc.peerID, err = siMapGetInt64(rawMsg, "p2p_id"); err != nil {
+			log.Println(p2pc.conn, err)
+			return
+		}
+	}
+	// Check for duplicates
+	dup := false
+	p2pPeers.lock.With(func() {
+		for p := range p2pPeers.peers {
+			if p.peerID == p2pc.peerID {
+				log.Printf("%v looks like a duplicate of %v (%x), dropping it.", p2pc.conn, p.conn, p2pc.peerID)
+				dup = true
+				return
+			}
+		}
+	})
+	if p2pc.peerID == p2pEphemeralID {
+		log.Printf("%v is apperently myself. Dropping it.", p2pc.conn)
+		dup = true
+	}
+	if dup {
+		p2pc.conn.Close()
+		return
+	}
 	dbSavePeer(p2pc.address)
-
 }
