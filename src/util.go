@@ -66,6 +66,19 @@ func siMapGetInt64(m map[string]interface{}, key string) (int64, error) {
 	return int64(val), nil
 }
 
+func siMapGetInt(m map[string]interface{}, key string) (int, error) {
+	var ok bool
+	var ii interface{}
+	if ii, ok = m[key]; !ok {
+		return 0, fmt.Errorf("No '%s' key in map", key)
+	}
+	var val float64
+	if val, ok = ii.(float64); !ok {
+		return 0, fmt.Errorf("The '%s' key in map is not an int64", key)
+	}
+	return int(val), nil
+}
+
 // Returns a hex-encoded hash of the given byte slice
 func hashBytesToHexString(b []byte) string {
 	hash := sha256.Sum256(b)

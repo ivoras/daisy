@@ -183,7 +183,12 @@ func (p2pc *p2pConnection) handleMsgHello(rawMsg map[string]interface{}) {
 		log.Println(p2pc.conn, err)
 		return
 	}
-	log.Println("Hello from", p2pc.conn, ver)
+	var peerHeight int
+	if peerHeight, err = siMapGetInt(rawMsg, "chain_height"); err != nil {
+		log.Println(p2pc.conn, err)
+		return
+	}
+	log.Println("Hello from", p2pc.conn, ver, peerHeight, "blocks")
 	if p2pc.peerID == 0 {
 		if p2pc.peerID, err = siMapGetInt64(rawMsg, "p2p_id"); err != nil {
 			log.Println(p2pc.conn, err)
