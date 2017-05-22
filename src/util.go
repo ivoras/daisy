@@ -59,11 +59,11 @@ func siMapGetInt64(m map[string]interface{}, key string) (int64, error) {
 	if ii, ok = m[key]; !ok {
 		return 0, fmt.Errorf("No '%s' key in map", key)
 	}
-	var val int64
-	if val, ok = ii.(int64); !ok {
-		return 0, fmt.Errorf("The '%s' key in map is not a string", key)
+	var val float64
+	if val, ok = ii.(float64); !ok {
+		return 0, fmt.Errorf("The '%s' key in map is not an int64", key)
 	}
-	return val, nil
+	return int64(val), nil
 }
 
 // Returns a hex-encoded hash of the given byte slice
