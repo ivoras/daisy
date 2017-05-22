@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
 	"net"
 	"strconv"
 	"time"
@@ -34,7 +33,7 @@ var bootstrapPeers = peerStringMap{
 	"fielder.ivoras.net:2017": time.Now(),
 }
 
-var p2pEphemeralID = rand.Int63() & 0xffffffffffff
+var p2pEphemeralID = randInt63() & 0xffffffffffff
 
 type p2pConnection struct {
 	conn    net.Conn
@@ -199,7 +198,7 @@ func (p2pc *p2pConnection) handleMsgHello(rawMsg map[string]interface{}) {
 	dup := false
 	p2pPeers.lock.With(func() {
 		for p := range p2pPeers.peers {
-			if p.peerID == p2pc.peerID {
+			if p.peerID == p2pc.peerID && p != p2pc {
 				log.Printf("%v looks like a duplicate of %v (%x), dropping it.", p2pc.conn, p.conn, p2pc.peerID)
 				dup = true
 				return
@@ -207,7 +206,7 @@ func (p2pc *p2pConnection) handleMsgHello(rawMsg map[string]interface{}) {
 		}
 	})
 	if p2pc.peerID == p2pEphemeralID {
-		log.Printf("%v is apperently myself. Dropping it.", p2pc.conn)
+		log.Printf("%v is apperently myself (%x). Dropping it.", p2pc.conn, p2pc.peerID)
 		dup = true
 	}
 	if dup {

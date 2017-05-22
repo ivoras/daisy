@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"unsafe"
 )
 
 var bigIntZero = big.NewInt(0)
@@ -181,4 +182,16 @@ func cryptoVerifyBytes(publicKey *ecdsa.PublicKey, hash []byte, signature []byte
 		return nil
 	}
 	return fmt.Errorf("Signature verification failed")
+}
+
+func randInt63() int64 {
+	buf := make([]byte, 8)
+	n, err := rand.Read(buf)
+	if err != nil {
+		log.Panic(err)
+	}
+	if n != len(buf) {
+		log.Panic("Cannot read 8 random bytes")
+	}
+	return *(*int64)(unsafe.Pointer(&buf[0]))
 }
