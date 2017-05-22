@@ -193,5 +193,9 @@ func randInt63() int64 {
 	if n != len(buf) {
 		log.Panic("Cannot read 8 random bytes")
 	}
-	return *(*int64)(unsafe.Pointer(&buf[0]))
+	v := *(*int64)(unsafe.Pointer(&buf[0]))
+	if v >= 0 {
+		return v
+	}
+	return -v
 }
