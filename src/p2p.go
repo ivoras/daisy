@@ -187,13 +187,13 @@ func (p2pc *p2pConnection) handleMsgHello(rawMsg map[string]interface{}) {
 		log.Println(p2pc.conn, err)
 		return
 	}
-	log.Println("Hello from", p2pc.conn, ver, peerHeight, "blocks")
 	if p2pc.peerID == 0 {
 		if p2pc.peerID, err = siMapGetInt64(rawMsg, "p2p_id"); err != nil {
 			log.Println(p2pc.conn, err)
 			return
 		}
 	}
+	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.conn, ver, p2pc.peerID, peerHeight)
 	// Check for duplicates
 	dup := false
 	p2pPeers.lock.With(func() {
