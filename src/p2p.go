@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"strconv"
 	"time"
@@ -12,12 +13,14 @@ import (
 
 const p2pClientVersionString = "godaisy/1.0"
 
+// Header for JSON messages we're sending
 type p2pMsgHeader struct {
 	Root  string `json:"root"`
 	Msg   string `json:"msg"`
 	P2pID int64  `json:"p2p_id"`
 }
 
+// The hello message
 const p2pMsgHello = "hello"
 
 type p2pMsgHelloStruct struct {
@@ -26,6 +29,16 @@ type p2pMsgHelloStruct struct {
 	ChainHeight int    `json:"chain_height"`
 }
 
+// The message asking for block hashes
+const p2pMsgGetBlockHashes = "getblockhashes"
+
+type p2pMsgGetBlockHashesStruct struct {
+	p2pMsgHeader
+	minBlockHeight int
+	maxBlockHeight int
+}
+
+// Map of peer addresses, for easy set-like behaviour
 type peerStringMap map[string]time.Time
 
 var bootstrapPeers = peerStringMap{
@@ -33,28 +46,49 @@ var bootstrapPeers = peerStringMap{
 	"fielder.ivoras.net:2017": time.Now(),
 }
 
+// The temporary ID of this node, strong RNG
 var p2pEphemeralID = randInt63() & 0xffffffffffff
 
+// Everything useful describing one p2p connection
 type p2pConnection struct {
-	conn    net.Conn
-	address string // host:port
-	peer    *bufio.ReadWriter
-	peerID  int64
+	conn        net.Conn
+	address     string // host:port
+	peer        *bufio.ReadWriter
+	peerID      int64
+	chainHeight int
+	refreshTime time.Time
 }
 
+// A set of p2p connections
 type p2pPeersSet struct {
 	peers map[*p2pConnection]time.Time
 	lock  WithMutex
 }
 
+// The global set of p2p connections
 var p2pPeers = p2pPeersSet{peers: make(map[*p2pConnection]time.Time)}
 
+// Messages to the p2p controller goroutine
+const (
+	p2pCtrlSearchForBlocks = iota
+	p2pCtrlHaveNewBlock
+)
+
+type p2pCtrlMessage struct {
+	msgType int
+	payload interface{}
+}
+
+var p2pCtrlChannel = make(chan p2pCtrlMessage, 8)
+
+// Adds a p2p connections to the set of p2p connections
 func (p *p2pPeersSet) Add(c *p2pConnection) {
 	p.lock.With(func() {
 		p.peers[c] = time.Now()
 	})
 }
 
+// Removes a p2p connection from the set of p2p connections
 func (p *p2pPeersSet) Remove(c *p2pConnection) {
 	p.lock.With(func() {
 		delete(p.peers, c)
@@ -125,6 +159,8 @@ func (p2pc *p2pConnection) sendMsg(msg interface{}) error {
 
 func (p2pc *p2pConnection) handleConnection() {
 	defer p2pc.conn.Close()
+	defer p2pPeers.Remove(p2pc)
+
 	p2pc.peer = bufio.NewReadWriter(bufio.NewReader(p2pc.conn), bufio.NewWriter(p2pc.conn))
 	helloMsg := p2pMsgHelloStruct{
 		p2pMsgHeader: p2pMsgHeader{
@@ -173,6 +209,7 @@ func (p2pc *p2pConnection) handleConnection() {
 			p2pc.handleMsgHello(msg)
 		}
 	}
+	// The connection has been dismissed
 }
 
 func (p2pc *p2pConnection) handleMsgHello(rawMsg map[string]interface{}) {
@@ -182,8 +219,7 @@ func (p2pc *p2pConnection) handleMsgHello(rawMsg map[string]interface{}) {
 		log.Println(p2pc.conn, err)
 		return
 	}
-	var peerHeight int
-	if peerHeight, err = siMapGetInt(rawMsg, "chain_height"); err != nil {
+	if p2pc.chainHeight, err = siMapGetInt(rawMsg, "chain_height"); err != nil {
 		log.Println(p2pc.conn, err)
 		return
 	}
@@ -193,7 +229,7 @@ func (p2pc *p2pConnection) handleMsgHello(rawMsg map[string]interface{}) {
 			return
 		}
 	}
-	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.conn, ver, p2pc.peerID, peerHeight)
+	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.conn, ver, p2pc.peerID, p2pc.chainHeight)
 	// Check for duplicates
 	dup := false
 	p2pPeers.lock.With(func() {
@@ -214,4 +250,64 @@ func (p2pc *p2pConnection) handleMsgHello(rawMsg map[string]interface{}) {
 		return
 	}
 	dbSavePeer(p2pc.address)
+	p2pc.refreshTime = time.Now()
+	if p2pc.chainHeight > dbGetBlockchainHeight() {
+		p2pCtrlChannel <- p2pCtrlMessage{msgType: p2pCtrlSearchForBlocks, payload: p2pc}
+	}
+}
+
+// Data related to the (single instance of) the global p2p coordinator. This is also a
+// single-threaded object, its fields and methods are only expected to be accessed from
+// the Run() goroutine.
+type p2pCoordinatorType struct {
+	blockSearching        bool
+	blockSearchingResults map[int64]map[int]string // Maps a p2p ID to a map of height->hash pairs
+}
+
+var p2pCoordinator = p2pCoordinatorType{
+	blockSearchingResults: make(map[int64]map[int]string),
+}
+
+func (co *p2pCoordinatorType) Run() {
+	for {
+		msg := <-p2pCtrlChannel
+		switch msg.msgType {
+		case p2pCtrlSearchForBlocks:
+			co.handleSearchForBlocks(msg.payload.(*p2pConnection))
+		}
+	}
+}
+
+// Searches the p2p network for new blocks, starting with the given connection, by
+// sending a query for blocks to up to 10% of nodes. The idea is to make this a
+// two-phase operation: first issue a p2pMsgGetBlockHashes request for block hashes,
+// then wait for replies and see
+func (co *p2pCoordinatorType) handleSearchForBlocks(p2pcStart *p2pConnection) {
+	if co.blockSearching {
+		return
+	}
+	co.blockSearching = true
+	co.blockSearchingResults = make(map[int64]map[int]string)
+	p2pPeers.lock.With(func() {
+		qlist := make([]*p2pConnection, 1)
+		qlist[0] = p2pcStart
+		for p := range p2pPeers.peers {
+			if rand.Float32() < 0.1 {
+				qlist = append(qlist, p)
+			}
+		}
+		msg := p2pMsgGetBlockHashesStruct{
+			p2pMsgHeader: p2pMsgHeader{
+				P2pID: p2pEphemeralID,
+				Root:  GenesisBlockHash,
+				Msg:   p2pMsgGetBlockHashes,
+			},
+			minBlockHeight: 0,
+			maxBlockHeight: p2pcStart.chainHeight,
+		}
+		for _, p := range qlist {
+			co.blockSearchingResults[p.peerID] = make(map[int]string)
+			p.sendMsg(msg)
+		}
+	})
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
@@ -21,6 +22,7 @@ var sysEventChannel = make(chan sysEventMessage, 5)
 var startTime = time.Now()
 
 func main() {
+	rand.Seed(p2pEphemeralID + getNowUTC()) // Initialise weak RNG with strong RNG
 	log.Println("Starting up...")
 	sigChannel := make(chan os.Signal, 1)
 	signal.Notify(sigChannel, syscall.SIGINT)
@@ -33,6 +35,7 @@ func main() {
 		return
 	}
 	log.Printf("Ephemeral ID: %x\n", p2pEphemeralID)
+	go p2pCoordinator.Run()
 	go p2pServer()
 	go p2pClient()
 
