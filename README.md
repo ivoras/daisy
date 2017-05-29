@@ -2,13 +2,21 @@
 
 # What if...
 
-What if there is a blockchain where only certain nodes, in possession of one of accepted private keys, can add data to a blockchain, whose blocks are (SQLite) databases, and if those nodes can accept new ones into their ranks by signing the candidate's keys in a web-of-trust style?
+What if there is a blockchain where only certain nodes, in possession of one of accepted private keys, can add data (i.e. new blocks) to a blockchain, whose blocks are (SQLite) databases, and where those existing nodes can accept new ones into their ranks by signing the candidate's keys in a web-of-trust style?
 
 What if public (government) documents were distributed in this way...? What if Wikipedia was...?
 
 # Current status
 
 Basic crypto, block and db operations are implemented, the network part is still pending.
+
+## ToDo
+
+* Implement nicer error handling when replying to messages
+* Refactor db* and blockchain* into struct methods
+* Implement the "URL" encoding for block transfers: so the data in the JSON messages isn't block data, but an URL to the block data.
+* Implement a Bloom filter for tables in SQL queries, to skip querying blocks which don't have the appropriate tables.
+* Implement stochastic guarded block importing: if there apparently is a new block in the network: ask a number of peers if they've seen it before importing it.
 
 ## Design notes
 
@@ -26,6 +34,7 @@ Basic crypto, block and db operations are implemented, the network part is still
       number is given as "1 if height < 149 else floor(log(height)*2)"
     * Longest chain wins.
 * Flood-based p2p network: every node can request a list of known connections from the other nodes.
+* Each message contains the genesis (root) block hash, so technically multiple chains can safely communicate on the same TCP port
 
 ## How blocks are created
 

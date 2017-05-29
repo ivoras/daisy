@@ -2,11 +2,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"compress/zlib"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
-	"math/rand"
 	"net"
+	"os"
 	"strconv"
 	"time"
 )
@@ -34,8 +38,34 @@ const p2pMsgGetBlockHashes = "getblockhashes"
 
 type p2pMsgGetBlockHashesStruct struct {
 	p2pMsgHeader
-	minBlockHeight int
-	maxBlockHeight int
+	MinBlockHeight int `json:"min_block_height"`
+	MaxBlockHeight int `json:"max_block_height"`
+}
+
+// The message reporting block hashes a node has
+const p2pMsgBlockHashes = "blockhashes"
+
+type p2pMsgBlockHashesStruct struct {
+	p2pMsgHeader
+	Hashes map[int]string `json:"hashes"`
+}
+
+// The message asking for block data
+const p2pMsgGetBlock = "getblock"
+
+type p2pMsgGetBlockStruct struct {
+	p2pMsgHeader
+	Hash string `json:"hash"`
+}
+
+// The message containing one block's data
+const p2pMsgBlock = "block"
+
+type p2pMsgBlockStruct struct {
+	p2pMsgHeader
+	Hash     string `json:"hash"`
+	Encoding string `json:"encoding"`
+	Data     string `json:"data"`
 }
 
 // Map of peer addresses, for easy set-like behaviour
@@ -207,6 +237,10 @@ func (p2pc *p2pConnection) handleConnection() {
 		switch cmd {
 		case p2pMsgHello:
 			p2pc.handleMsgHello(msg)
+		case p2pMsgGetBlockHashes:
+			p2pc.handleGetBlockHashes(msg)
+		case p2pMsgGetBlock:
+			p2pc.handleGetBlock(msg)
 		}
 	}
 	// The connection has been dismissed
@@ -256,58 +290,137 @@ func (p2pc *p2pConnection) handleMsgHello(rawMsg map[string]interface{}) {
 	}
 }
 
+func (p2pc *p2pConnection) handleGetBlockHashes(msg map[string]interface{}) {
+	var minBlockHeight int
+	var maxBlockHeight int
+	var err error
+	if minBlockHeight, err = siMapGetInt(msg, "min_block_height"); err != nil {
+		log.Println(p2pc.conn, err)
+		return
+	}
+	if maxBlockHeight, err = siMapGetInt(msg, "max_block_height"); err != nil {
+		log.Println(p2pc.conn, err)
+		return
+	}
+	respMsg := p2pMsgBlockHashesStruct{
+		p2pMsgHeader: p2pMsgHeader{
+			P2pID: p2pEphemeralID,
+			Root:  GenesisBlockHash,
+			Msg:   p2pMsgBlockHashes,
+		},
+		Hashes: dbGetHeightHashes(minBlockHeight, maxBlockHeight),
+	}
+	p2pc.sendMsg(respMsg)
+}
+
+func (p2pc *p2pConnection) handleGetBlock(msg map[string]interface{}) {
+	hash, err := siMapGetString(msg, "hash")
+	if err != nil {
+		log.Println(p2pc.conn, err)
+		return
+	}
+	dbb, err := dbGetBlock(hash)
+	if err != nil {
+		log.Println(p2pc.conn, err)
+		return
+	}
+	fileName := blockchainGetFilename(dbb.Height)
+	f, err := os.Open(fileName)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	var zbuf bytes.Buffer
+	w := zlib.NewWriter(&zbuf)
+	_, err = io.Copy(w, f)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	w.Close()
+	b64block := base64.StdEncoding.EncodeToString(zbuf.Bytes())
+	respMsg := p2pMsgBlockStruct{
+		p2pMsgHeader: p2pMsgHeader{
+			P2pID: p2pEphemeralID,
+			Root:  GenesisBlockHash,
+			Msg:   p2pMsgBlock,
+		},
+		Hash: hash,
+		Data: b64block,
+	}
+	p2pc.sendMsg(respMsg)
+}
+
 // Data related to the (single instance of) the global p2p coordinator. This is also a
 // single-threaded object, its fields and methods are only expected to be accessed from
 // the Run() goroutine.
 type p2pCoordinatorType struct {
-	blockSearching        bool
-	blockSearchingResults map[int64]map[int]string // Maps a p2p ID to a map of height->hash pairs
+	timeTicks                chan int
+	lastTickBlockchainHeight int
 }
 
-var p2pCoordinator = p2pCoordinatorType{
-	blockSearchingResults: make(map[int64]map[int]string),
-}
+var p2pCoordinator = p2pCoordinatorType{}
 
 func (co *p2pCoordinatorType) Run() {
+	co.lastTickBlockchainHeight = dbGetBlockchainHeight()
 	for {
-		msg := <-p2pCtrlChannel
-		switch msg.msgType {
-		case p2pCtrlSearchForBlocks:
-			co.handleSearchForBlocks(msg.payload.(*p2pConnection))
+		select {
+		case msg := <-p2pCtrlChannel:
+			switch msg.msgType {
+			case p2pCtrlSearchForBlocks:
+				co.handleSearchForBlocks(msg.payload.(*p2pConnection))
+			}
+		case <-co.timeTicks:
+			co.handleTimeTick()
 		}
 	}
 }
 
-// Searches the p2p network for new blocks, starting with the given connection, by
-// sending a query for blocks to up to 10% of nodes. The idea is to make this a
-// two-phase operation: first issue a p2pMsgGetBlockHashes request for block hashes,
-// then wait for replies and see
-func (co *p2pCoordinatorType) handleSearchForBlocks(p2pcStart *p2pConnection) {
-	if co.blockSearching {
-		return
+func (co *p2pCoordinatorType) timeTickSource() {
+	for {
+		time.Sleep(1 * time.Second)
+		co.timeTicks <- 1
 	}
-	co.blockSearching = true
-	co.blockSearchingResults = make(map[int64]map[int]string)
+}
+
+// Retrieves block hashes from a node which apparently has more blocks than we do.
+// ToDo: This is a simplistic version. Make it better by introducing quorums.
+func (co *p2pCoordinatorType) handleSearchForBlocks(p2pcStart *p2pConnection) {
+	msg := p2pMsgGetBlockHashesStruct{
+		p2pMsgHeader: p2pMsgHeader{
+			P2pID: p2pEphemeralID,
+			Root:  GenesisBlockHash,
+			Msg:   p2pMsgGetBlockHashes,
+		},
+		MinBlockHeight: dbGetBlockchainHeight(),
+		MaxBlockHeight: p2pcStart.chainHeight,
+	}
+	p2pcStart.sendMsg(msg)
+}
+
+// Executed periodically to perform time-dependant actions. Do not rely on the
+// time period to be predictable or precise.
+func (co *p2pCoordinatorType) handleTimeTick() {
+	newHeight := dbGetBlockchainHeight()
+	if newHeight > co.lastTickBlockchainHeight {
+		co.floodPeersWithNewBlocks(co.lastTickBlockchainHeight, newHeight)
+		co.lastTickBlockchainHeight = newHeight
+	}
+}
+
+func (co *p2pCoordinatorType) floodPeersWithNewBlocks(minHeight, maxHeight int) {
+	blockHashes := dbGetHeightHashes(minHeight, maxHeight)
+	msg := p2pMsgBlockHashesStruct{
+		p2pMsgHeader: p2pMsgHeader{
+			P2pID: p2pEphemeralID,
+			Root:  GenesisBlockHash,
+			Msg:   p2pMsgBlockHashes,
+		},
+		Hashes: blockHashes,
+	}
 	p2pPeers.lock.With(func() {
-		qlist := make([]*p2pConnection, 1)
-		qlist[0] = p2pcStart
-		for p := range p2pPeers.peers {
-			if rand.Float32() < 0.1 {
-				qlist = append(qlist, p)
-			}
-		}
-		msg := p2pMsgGetBlockHashesStruct{
-			p2pMsgHeader: p2pMsgHeader{
-				P2pID: p2pEphemeralID,
-				Root:  GenesisBlockHash,
-				Msg:   p2pMsgGetBlockHashes,
-			},
-			minBlockHeight: 0,
-			maxBlockHeight: p2pcStart.chainHeight,
-		}
-		for _, p := range qlist {
-			co.blockSearchingResults[p.peerID] = make(map[int]string)
-			p.sendMsg(msg)
+		for p2pc := range p2pPeers.peers {
+			p2pc.sendMsg(msg)
 		}
 	})
 }

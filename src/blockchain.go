@@ -281,6 +281,10 @@ func QuorumForHeight(h int) int {
 	return int(math.Log(float64(h)) * 2)
 }
 
+func blockchainGetFilename(h int) string {
+	return fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, h)
+}
+
 // OpenBlockByHeight opens a block stored in the blockchain at the given height
 func OpenBlockByHeight(height int) (*Block, error) {
 	b := Block{DbBlockchainBlock: &DbBlockchainBlock{Height: height}}

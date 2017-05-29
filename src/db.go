@@ -239,6 +239,24 @@ func dbGetBlockchainHeight() int {
 	return height
 }
 
+func dbGetHeightHashes(minHeight, maxHeight int) map[int]string {
+	rows, err := mainDb.Query("SELECT height, hash FROM blockchain WHERE height BETWEEN ? AND ? ORDER BY height", minHeight, maxHeight)
+	if err != nil {
+		log.Panic(err)
+	}
+	defer rows.Close()
+	hh := make(map[int]string)
+	for rows.Next() {
+		var height int
+		var hash string
+		if err = rows.Scan(&height, &hash); err != nil {
+			log.Panic(err)
+		}
+		hh[height] = hash
+	}
+	return hh
+}
+
 func dbGetAPrivateKey() ([]byte, string, error) {
 	var publicKeyHash string
 	var privateKey string
@@ -305,6 +323,34 @@ func dbGetBlockByHeight(height int) (*DbBlockchainBlock, error) {
 	var prevHashSignatureHex string
 	var timeAccepted int
 	err := mainDb.QueryRow("SELECT hash, height, prev_hash, sigkey_hash, hash_signature, prev_hash_signature, time_accepted, version FROM blockchain WHERE height=?", height).Scan(
+		&dbb.Hash, &dbb.Height, &dbb.PreviousBlockHash, &dbb.SignaturePublicKeyHash, &hashSignatureHex, &prevHashSignatureHex, &timeAccepted, &dbb.Version)
+	if err != nil && err != sql.ErrNoRows {
+		log.Panicln(err)
+	}
+	if err == sql.ErrNoRows {
+		return nil, err
+	}
+	dbb.PreviousBlockHashSignature, err = hex.DecodeString(prevHashSignatureHex)
+	if err != nil {
+		return nil, err
+	}
+	dbb.HashSignature, err = hex.DecodeString(hashSignatureHex)
+	if err != nil {
+		return nil, err
+	}
+	dbb.TimeAccepted = unixTimeStampToUTCTime(timeAccepted)
+	if err != nil {
+		return nil, err
+	}
+	return &dbb, nil
+}
+
+func dbGetBlock(hash string) (*DbBlockchainBlock, error) {
+	var dbb DbBlockchainBlock
+	var hashSignatureHex string
+	var prevHashSignatureHex string
+	var timeAccepted int
+	err := mainDb.QueryRow("SELECT hash, height, prev_hash, sigkey_hash, hash_signature, prev_hash_signature, time_accepted, version FROM blockchain WHERE hash=?", hash).Scan(
 		&dbb.Hash, &dbb.Height, &dbb.PreviousBlockHash, &dbb.SignaturePublicKeyHash, &hashSignatureHex, &prevHashSignatureHex, &timeAccepted, &dbb.Version)
 	if err != nil && err != sql.ErrNoRows {
 		log.Panicln(err)
