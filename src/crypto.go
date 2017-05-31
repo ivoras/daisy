@@ -154,6 +154,15 @@ func cryptoVerifyHex(publicKey *ecdsa.PublicKey, hash string, signature string) 
 	return cryptoVerifyBytes(publicKey, hashBytes, signatureBytes)
 }
 
+func cryptoVerifyHexBytes(publicKey *ecdsa.PublicKey, hash string, signatureBytes []byte) error {
+	hashBytes, err := hex.DecodeString(hash)
+	if err != nil {
+		return err
+	}
+	return cryptoVerifyBytes(publicKey, hashBytes, signatureBytes)
+
+}
+
 func cryptoSignBytes(myPrivateKey *ecdsa.PrivateKey, hash []byte) ([]byte, error) {
 	var sig ecdsaSignature
 	var err error

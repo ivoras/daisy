@@ -218,7 +218,14 @@ func dbWritePublicKey(pubkey []byte, hash string, blockHeight int) {
 	_, err := mainDb.Exec("INSERT INTO pubkeys(pubkey_hash, pubkey, state, time_added, block_height) VALUES (?, ?, ?, ?, ?)",
 		hash, hex.EncodeToString(pubkey), "A", time.Now().Unix(), blockHeight)
 	if err != nil {
-		log.Panicln(err)
+		log.Panic(err)
+	}
+}
+
+func dbRevokePublicKey(hash string) {
+	_, err := mainDb.Exec("UPDATE pubkeys SET time_revoked=? WHERE pubkey_hash=?", getNowUTC(), hash)
+	if err != nil {
+		log.Panic(err)
 	}
 }
 
@@ -371,6 +378,24 @@ func dbGetBlock(hash string) (*DbBlockchainBlock, error) {
 		return nil, err
 	}
 	return &dbb, nil
+}
+
+func dbBlockHashExists(hash string) bool {
+	var count int
+	err := mainDb.QueryRow("SELECT COUNT(*) FROM blockchain WHERE hash=?", hash).Scan(&count)
+	if err != nil {
+		log.Panic(err)
+	}
+	return count > 0
+}
+
+func dbBlockHeightExists(h int) bool {
+	var count int
+	err := mainDb.QueryRow("SELECT COUNT(*) FROM blockchain WHERE height=?", h).Scan(&count)
+	if err != nil {
+		log.Panic(err)
+	}
+	return count > 0
 }
 
 // Inserts a block record into the main database, without validation

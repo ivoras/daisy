@@ -5,12 +5,15 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -63,9 +66,11 @@ const p2pMsgBlock = "block"
 
 type p2pMsgBlockStruct struct {
 	p2pMsgHeader
-	Hash     string `json:"hash"`
-	Encoding string `json:"encoding"`
-	Data     string `json:"data"`
+	Hash          string `json:"hash"`
+	HashSignature string `json:"hash_signature"`
+	Size          int64  `json:"size"`
+	Encoding      string `json:"encoding"`
+	Data          string `json:"data"`
 }
 
 // Map of peer addresses, for easy set-like behaviour
@@ -213,7 +218,7 @@ func (p2pc *p2pConnection) handleConnection() {
 			log.Println("Error reading data from", p2pc.conn, err)
 			break
 		}
-		var msg map[string]interface{}
+		var msg StrIfMap
 		err = json.Unmarshal(line, &msg)
 		if err != nil {
 			log.Println("Cannot parse json", string(line), "from", p2pc.conn)
@@ -221,7 +226,7 @@ func (p2pc *p2pConnection) handleConnection() {
 		}
 
 		var root string
-		if root, err = siMapGetString(msg, "root"); err != nil {
+		if root, err = msg.GetString("root"); err != nil {
 			log.Printf("Problem with chain root from  %v: %v", p2pc.conn, err)
 			break
 		}
@@ -231,7 +236,7 @@ func (p2pc *p2pConnection) handleConnection() {
 		}
 
 		var cmd string
-		if cmd, err = siMapGetString(msg, "msg"); err != nil {
+		if cmd, err = msg.GetString("msg"); err != nil {
 			log.Printf("Error with msg from %v: %v", p2pc.conn, err)
 		}
 		switch cmd {
@@ -239,26 +244,30 @@ func (p2pc *p2pConnection) handleConnection() {
 			p2pc.handleMsgHello(msg)
 		case p2pMsgGetBlockHashes:
 			p2pc.handleGetBlockHashes(msg)
+		case p2pMsgBlockHashes:
+			p2pc.handleBlockHashes(msg)
 		case p2pMsgGetBlock:
 			p2pc.handleGetBlock(msg)
+		case p2pMsgBlock:
+			p2pc.handleBlock(msg)
 		}
 	}
 	// The connection has been dismissed
 }
 
-func (p2pc *p2pConnection) handleMsgHello(rawMsg map[string]interface{}) {
+func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 	var ver string
 	var err error
-	if ver, err = siMapGetString(rawMsg, "version"); err != nil {
+	if ver, err = msg.GetString("version"); err != nil {
 		log.Println(p2pc.conn, err)
 		return
 	}
-	if p2pc.chainHeight, err = siMapGetInt(rawMsg, "chain_height"); err != nil {
+	if p2pc.chainHeight, err = msg.GetInt("chain_height"); err != nil {
 		log.Println(p2pc.conn, err)
 		return
 	}
 	if p2pc.peerID == 0 {
-		if p2pc.peerID, err = siMapGetInt64(rawMsg, "p2p_id"); err != nil {
+		if p2pc.peerID, err = msg.GetInt64("p2p_id"); err != nil {
 			log.Println(p2pc.conn, err)
 			return
 		}
@@ -290,15 +299,16 @@ func (p2pc *p2pConnection) handleMsgHello(rawMsg map[string]interface{}) {
 	}
 }
 
-func (p2pc *p2pConnection) handleGetBlockHashes(msg map[string]interface{}) {
+// getblockhashes
+func (p2pc *p2pConnection) handleGetBlockHashes(msg StrIfMap) {
 	var minBlockHeight int
 	var maxBlockHeight int
 	var err error
-	if minBlockHeight, err = siMapGetInt(msg, "min_block_height"); err != nil {
+	if minBlockHeight, err = msg.GetInt("min_block_height"); err != nil {
 		log.Println(p2pc.conn, err)
 		return
 	}
-	if maxBlockHeight, err = siMapGetInt(msg, "max_block_height"); err != nil {
+	if maxBlockHeight, err = msg.GetInt("max_block_height"); err != nil {
 		log.Println(p2pc.conn, err)
 		return
 	}
@@ -313,8 +323,41 @@ func (p2pc *p2pConnection) handleGetBlockHashes(msg map[string]interface{}) {
 	p2pc.sendMsg(respMsg)
 }
 
-func (p2pc *p2pConnection) handleGetBlock(msg map[string]interface{}) {
-	hash, err := siMapGetString(msg, "hash")
+// blockhashes
+func (p2pc *p2pConnection) handleBlockHashes(msg StrIfMap) {
+	var hashes map[int]string
+	var err error
+	if hashes, err = msg.GetIntStringMap("hashes"); err != nil {
+		log.Println(p2pc.conn, err)
+		return
+	}
+	heights := make([]int, len(hashes))
+	n := 0
+	for h := range hashes {
+		heights[n] = h
+		n++
+	}
+	sort.Ints(heights)
+	for h := range heights {
+		if dbBlockHeightExists(h) {
+			log.Println("Already have block", h)
+			continue
+		}
+		msg := p2pMsgGetBlockStruct{
+			p2pMsgHeader: p2pMsgHeader{
+				P2pID: p2pEphemeralID,
+				Root:  GenesisBlockHash,
+				Msg:   p2pMsgBlockHashes,
+			},
+			Hash: hashes[h],
+		}
+		p2pc.sendMsg(msg)
+	}
+}
+
+// getblock: a request to transfer a block
+func (p2pc *p2pConnection) handleGetBlock(msg StrIfMap) {
+	hash, err := msg.GetString("hash")
 	if err != nil {
 		log.Println(p2pc.conn, err)
 		return
@@ -325,19 +368,33 @@ func (p2pc *p2pConnection) handleGetBlock(msg map[string]interface{}) {
 		return
 	}
 	fileName := blockchainGetFilename(dbb.Height)
+	st, err := os.Stat(fileName)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	fileSize := st.Size()
 	f, err := os.Open(fileName)
 	if err != nil {
 		log.Println(err)
 		return
 	}
+	defer f.Close()
 	var zbuf bytes.Buffer
 	w := zlib.NewWriter(&zbuf)
-	_, err = io.Copy(w, f)
+	written, err := io.Copy(w, f)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	w.Close()
+	if written != fileSize {
+		log.Println("Something broke when working with zlib:", written, "vs", fileSize)
+		return
+	}
+	err = w.Close()
+	if err != nil {
+		log.Panic(err)
+	}
 	b64block := base64.StdEncoding.EncodeToString(zbuf.Bytes())
 	respMsg := p2pMsgBlockStruct{
 		p2pMsgHeader: p2pMsgHeader{
@@ -345,10 +402,81 @@ func (p2pc *p2pConnection) handleGetBlock(msg map[string]interface{}) {
 			Root:  GenesisBlockHash,
 			Msg:   p2pMsgBlock,
 		},
-		Hash: hash,
-		Data: b64block,
+		Hash:          hash,
+		HashSignature: hex.EncodeToString(dbb.HashSignature),
+		Encoding:      "zlib-base64",
+		Data:          b64block,
+		Size:          fileSize,
 	}
 	p2pc.sendMsg(respMsg)
+}
+
+// block: A block is received
+func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
+	hash, err := msg.GetString("hash")
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	hashSignature, err := msg.GetString("hash_signature")
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	dataString, err := msg.GetString("data")
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	if dbBlockHashExists(hash) {
+		log.Println("Replacing / orphaning blocks not yet implemented")
+		return
+	}
+	fileSize, err := msg.GetInt64("size")
+	if err != nil {
+		log.Println(err)
+	}
+	var blockFile *os.File
+	encoding, err := msg.GetString("encoding")
+	if encoding == "zlib-base64" {
+		zlibData, err := base64.StdEncoding.DecodeString(dataString)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		blockFile, err = ioutil.TempFile("", "daisy")
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		defer os.Remove(blockFile.Name())
+		r, err := zlib.NewReader(bytes.NewReader(zlibData))
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		written, err := io.Copy(blockFile, r)
+		r.Close()
+		blockFile.Close()
+		if written != fileSize {
+			log.Println("Error decoding block: sizes don't match:", written, "vs", fileSize)
+			return
+		}
+	} else {
+		log.Println("Unsupported encoding:", encoding)
+		return
+	}
+	blk, err := OpenBlockFile(blockFile.Name())
+	if err != nil {
+		log.Println(p2pc.conn, err)
+		return
+	}
+	blk.HashSignature, err = hex.DecodeString(hashSignature)
+	if err != nil {
+		log.Println(p2pc.conn, err)
+		return
+	}
+	err = checkAcceptBlock(blk)
 }
 
 // Data related to the (single instance of) the global p2p coordinator. This is also a

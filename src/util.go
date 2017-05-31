@@ -40,45 +40,6 @@ func stringMap2JsonBytes(m map[string]string) []byte {
 	return b
 }
 
-func siMapGetString(m map[string]interface{}, key string) (string, error) {
-	var ok bool
-	var ii interface{}
-	if ii, ok = m[key]; !ok {
-		return "", fmt.Errorf("No '%s' key in map", key)
-	}
-	var val string
-	if val, ok = ii.(string); !ok {
-		return "", fmt.Errorf("The '%s' key in map is not a string", key)
-	}
-	return val, nil
-}
-
-func siMapGetInt64(m map[string]interface{}, key string) (int64, error) {
-	var ok bool
-	var ii interface{}
-	if ii, ok = m[key]; !ok {
-		return 0, fmt.Errorf("No '%s' key in map", key)
-	}
-	var val float64
-	if val, ok = ii.(float64); !ok {
-		return 0, fmt.Errorf("The '%s' key in map is not an int64", key)
-	}
-	return int64(val), nil
-}
-
-func siMapGetInt(m map[string]interface{}, key string) (int, error) {
-	var ok bool
-	var ii interface{}
-	if ii, ok = m[key]; !ok {
-		return 0, fmt.Errorf("No '%s' key in map", key)
-	}
-	var val float64
-	if val, ok = ii.(float64); !ok {
-		return 0, fmt.Errorf("The '%s' key in map is not an int64", key)
-	}
-	return int(val), nil
-}
-
 // Returns a hex-encoded hash of the given byte slice
 func hashBytesToHexString(b []byte) string {
 	hash := sha256.Sum256(b)
@@ -98,4 +59,62 @@ func hashFileToHexString(fileName string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+type StrIfMap map[string]interface{}
+
+func (m StrIfMap) GetString(key string) (string, error) {
+	var ok bool
+	var ii interface{}
+	if ii, ok = m[key]; !ok {
+		return "", fmt.Errorf("No '%s' key in map", key)
+	}
+	var val string
+	if val, ok = ii.(string); !ok {
+		return "", fmt.Errorf("The '%s' key in map is not a string", key)
+	}
+	return val, nil
+}
+
+func (m StrIfMap) GetInt64(key string) (int64, error) {
+	var ok bool
+	var ii interface{}
+	if ii, ok = m[key]; !ok {
+		return 0, fmt.Errorf("No '%s' key in map", key)
+	}
+	var val float64
+	if val, ok = ii.(float64); !ok {
+		return 0, fmt.Errorf("The '%s' key in map is not an int64", key)
+	}
+	return int64(val), nil
+}
+
+func (m StrIfMap) GetInt(key string) (int, error) {
+	var ok bool
+	var ii interface{}
+	if ii, ok = m[key]; !ok {
+		return 0, fmt.Errorf("No '%s' key in map", key)
+	}
+	var val float64
+	if val, ok = ii.(float64); !ok {
+		return 0, fmt.Errorf("The '%s' key in map is not an int64", key)
+	}
+	return int(val), nil
+}
+
+func (m StrIfMap) GetIntStringMap(key string) (map[int]string, error) {
+	var ok bool
+	var ii interface{}
+	if ii, ok = m[key]; !ok {
+		return nil, fmt.Errorf("No '%s' key in map", key)
+	}
+	var val map[float64]string
+	if val, ok = ii.(map[float64]string); !ok {
+		return nil, fmt.Errorf("The '%s' key in map is not a map[float64]string", key)
+	}
+	var val2 map[int]string
+	for f, v := range val {
+		val2[int(f)] = v
+	}
+	return val2, nil
 }
