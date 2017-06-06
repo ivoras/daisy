@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -110,10 +109,9 @@ func (m StrIfMap) GetIntStringMap(key string) (map[int]string, error) {
 	if ii, ok = m[key]; !ok {
 		return nil, fmt.Errorf("No '%s' key in map", key)
 	}
-	var val map[string]string
-	if val, ok = ii.(map[string]string); !ok {
-		log.Println(reflect.TypeOf(ii))
-		return nil, fmt.Errorf("The '%s' key in map is not a map[string]string", key)
+	var val map[string]interface{}
+	if val, ok = ii.(map[string]interface{}); !ok {
+		return nil, fmt.Errorf("The '%s' key in map is not a map[string]interface{}", key)
 	}
 	var val2 map[int]string
 	for k, v := range val {
@@ -121,7 +119,11 @@ func (m StrIfMap) GetIntStringMap(key string) (map[int]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		val2[i] = v
+		var s string
+		if s, ok = v.(string); !ok {
+			return nil, fmt.Errorf("The value in the hashes map is not a string?")
+		}
+		val2[i] = s
 	}
 	return val2, nil
 }
