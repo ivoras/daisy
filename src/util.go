@@ -113,7 +113,7 @@ func (m StrIfMap) GetIntStringMap(key string) (map[int]string, error) {
 	if val, ok = ii.(map[string]interface{}); !ok {
 		return nil, fmt.Errorf("The '%s' key in map is not a map[string]interface{}", key)
 	}
-	var val2 map[int]string
+	var val2 = make(map[int]string)
 	for k, v := range val {
 		i, err := strconv.Atoi(k)
 		if err != nil {
