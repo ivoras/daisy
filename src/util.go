@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -111,6 +112,7 @@ func (m StrIfMap) GetIntStringMap(key string) (map[int]string, error) {
 	}
 	var val map[string]string
 	if val, ok = ii.(map[string]string); !ok {
+		log.Println(reflect.TypeOf(ii))
 		return nil, fmt.Errorf("The '%s' key in map is not a map[string]string", key)
 	}
 	var val2 map[int]string
