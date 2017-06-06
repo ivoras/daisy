@@ -316,7 +316,7 @@ func (p2pc *p2pConnection) handleGetBlockHashes(msg StrIfMap) {
 		p2pMsgHeader: p2pMsgHeader{
 			P2pID: p2pEphemeralID,
 			Root:  GenesisBlockHash,
-			Msg:   p2pMsgBlockHashes,
+			Msg:   p2pMsgGetBlock,
 		},
 		Hashes: dbGetHeightHashes(minBlockHeight, maxBlockHeight),
 	}
