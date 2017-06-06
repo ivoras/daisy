@@ -299,7 +299,7 @@ func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 	}
 }
 
-// getblockhashes
+// Handle getblockhashes
 func (p2pc *p2pConnection) handleGetBlockHashes(msg StrIfMap) {
 	var minBlockHeight int
 	var maxBlockHeight int
@@ -316,14 +316,14 @@ func (p2pc *p2pConnection) handleGetBlockHashes(msg StrIfMap) {
 		p2pMsgHeader: p2pMsgHeader{
 			P2pID: p2pEphemeralID,
 			Root:  GenesisBlockHash,
-			Msg:   p2pMsgGetBlock,
+			Msg:   p2pMsgBlockHashes,
 		},
 		Hashes: dbGetHeightHashes(minBlockHeight, maxBlockHeight),
 	}
 	p2pc.sendMsg(respMsg)
 }
 
-// blockhashes
+// Handle receiving blockhashes
 func (p2pc *p2pConnection) handleBlockHashes(msg StrIfMap) {
 	var hashes map[int]string
 	var err error
@@ -348,7 +348,7 @@ func (p2pc *p2pConnection) handleBlockHashes(msg StrIfMap) {
 			p2pMsgHeader: p2pMsgHeader{
 				P2pID: p2pEphemeralID,
 				Root:  GenesisBlockHash,
-				Msg:   p2pMsgBlockHashes,
+				Msg:   p2pMsgGetBlock,
 			},
 			Hash: hashes[h],
 		}
