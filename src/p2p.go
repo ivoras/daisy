@@ -482,6 +482,7 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 		log.Println("Cannot import block:", err)
 		return
 	}
+	blk.Height = height
 	err = blockchainCopyFile(blockFile.Name(), height)
 	if err != nil {
 		log.Println("Cannot copy block file:", err)
