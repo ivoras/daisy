@@ -15,10 +15,11 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
-const p2pClientVersionString = "godaisy/1.0"
+const p2pClientVersionString = "godaisy/0.1"
 
 // Header for JSON messages we're sending
 type p2pMsgHeader struct {
@@ -295,7 +296,7 @@ func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 		p2pc.conn.Close()
 		return
 	}
-	dbSavePeer(p2pc.address)
+	p2pc.checkSavePeer()
 	p2pc.refreshTime = time.Now()
 	if p2pc.chainHeight > dbGetBlockchainHeight() {
 		p2pCtrlChannel <- p2pCtrlMessage{msgType: p2pCtrlSearchForBlocks, payload: p2pc}
@@ -502,6 +503,28 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 	log.Println("Accepted block", blk.Hash, "at height", blk.Height)
 }
 
+func (p2pc *p2pConnection) checkSavePeer() {
+	i := strings.LastIndex(p2pc.address, ":")
+	var host string
+	if i > -1 {
+		host = p2pc.address[0:i]
+	} else {
+		host = p2pc.address
+	}
+	canonicalAddress := fmt.Sprintf("%s:%d", host, DefaultP2PPort)
+	addr, err := net.ResolveTCPAddr("tcp", canonicalAddress)
+	if err != nil {
+		return
+	}
+	conn, err := net.DialTCP("tcp", nil, addr)
+	if err != nil {
+		return
+	}
+	log.Println("Detected canonical peer at", canonicalAddress)
+	conn.Close()
+	dbSavePeer(canonicalAddress)
+}
+
 // Data related to the (single instance of) the global p2p coordinator. This is also a
 // single-threaded object, its fields and methods are only expected to be accessed from
 // the Run() goroutine.
@@ -515,10 +538,12 @@ type p2pCoordinatorType struct {
 var p2pCoordinator = p2pCoordinatorType{
 	recentlyRequestedBlocks: NewStringSetWithExpiry(5 * time.Second),
 	lastReconnectTime:       time.Now(),
+	timeTicks:               make(chan int),
 }
 
 func (co *p2pCoordinatorType) Run() {
 	co.lastTickBlockchainHeight = dbGetBlockchainHeight()
+	go co.timeTickSource()
 	for {
 		select {
 		case msg := <-p2pCtrlChannel:
@@ -562,8 +587,9 @@ func (co *p2pCoordinatorType) handleTimeTick() {
 		co.floodPeersWithNewBlocks(co.lastTickBlockchainHeight, newHeight)
 		co.lastTickBlockchainHeight = newHeight
 	}
-	if time.Since(co.lastReconnectTime) >= 10*time.Minute {
+	if time.Since(co.lastReconnectTime) >= 1*time.Minute {
 		co.lastReconnectTime = time.Now()
+		co.connectDbPeers()
 	}
 }
 
