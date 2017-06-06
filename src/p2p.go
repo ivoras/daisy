@@ -491,6 +491,7 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 		log.Println("Cannot insert block:", err)
 		return
 	}
+	log.Println("Accepted block", blk.Hash, "at height", blk.Height)
 }
 
 // Data related to the (single instance of) the global p2p coordinator. This is also a
