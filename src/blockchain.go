@@ -282,7 +282,8 @@ func checkAcceptBlock(blk *Block) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("Cannot find previous block %s: %v", blk.PreviousBlockHash, err)
 	}
-	if _, err := dbGetBlockByHeight(prevBlk.Height + 1); err != nil {
+	thisBlockHeight := prevBlk.Height + 1
+	if _, err := dbGetBlockByHeight(thisBlockHeight); err == nil {
 		return 0, fmt.Errorf("The block to accept would replace an existing block, and this is not supported yet (height=%d)", prevBlk.Height+1)
 	}
 	// Step 2: Is the block signed by a valid signatory?
@@ -309,7 +310,6 @@ func checkAcceptBlock(blk *Block) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	thisBlockHeight := prevBlk.Height + 1
 	targetQuorum := QuorumForHeight(thisBlockHeight)
 	for key, keyOps := range allKeyOps {
 		if len(keyOps) < targetQuorum {
