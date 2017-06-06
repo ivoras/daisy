@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -108,13 +109,17 @@ func (m StrIfMap) GetIntStringMap(key string) (map[int]string, error) {
 	if ii, ok = m[key]; !ok {
 		return nil, fmt.Errorf("No '%s' key in map", key)
 	}
-	var val map[float64]string
-	if val, ok = ii.(map[float64]string); !ok {
-		return nil, fmt.Errorf("The '%s' key in map is not a map[float64]string", key)
+	var val map[string]string
+	if val, ok = ii.(map[string]string); !ok {
+		return nil, fmt.Errorf("The '%s' key in map is not a map[string]string", key)
 	}
 	var val2 map[int]string
-	for f, v := range val {
-		val2[int(f)] = v
+	for k, v := range val {
+		i, err := strconv.Atoi(k)
+		if err != nil {
+			return nil, err
+		}
+		val2[i] = v
 	}
 	return val2, nil
 }
