@@ -476,7 +476,21 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 		log.Println(p2pc.conn, err)
 		return
 	}
-	err = checkAcceptBlock(blk)
+	height, err := checkAcceptBlock(blk)
+	if err != nil {
+		log.Println("Cannot import block:", err)
+		return
+	}
+	err = blockchainCopyFile(blockFile.Name(), height)
+	if err != nil {
+		log.Println("Cannot copy block file:", err)
+		return
+	}
+	err = dbInsertBlock(blk.DbBlockchainBlock)
+	if err != nil {
+		log.Println("Cannot insert block:", err)
+		return
+	}
 }
 
 // Data related to the (single instance of) the global p2p coordinator. This is also a

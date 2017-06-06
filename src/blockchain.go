@@ -273,60 +273,60 @@ func blockchainVerifyEverything() error {
 	return err
 }
 
-func checkAcceptBlock(blk *Block) error {
+func checkAcceptBlock(blk *Block) (int, error) {
 	// Step 1: Does the block fit, i.e. does it extend the chain?
 	if blk.Version != CurrentBlockVersion {
-		return fmt.Errorf("Unsupported block version: %d", blk.Version)
+		return 0, fmt.Errorf("Unsupported block version: %d", blk.Version)
 	}
 	prevBlk, err := dbGetBlock(blk.PreviousBlockHash)
 	if err != nil {
-		return fmt.Errorf("Cannot find previous block %s: %v", blk.PreviousBlockHash, err)
+		return 0, fmt.Errorf("Cannot find previous block %s: %v", blk.PreviousBlockHash, err)
 	}
 	if _, err := dbGetBlockByHeight(prevBlk.Height + 1); err != nil {
-		return fmt.Errorf("The block to accept would replace an existing block, and this is not supported yet (height=%d)", prevBlk.Height+1)
+		return 0, fmt.Errorf("The block to accept would replace an existing block, and this is not supported yet (height=%d)", prevBlk.Height+1)
 	}
 	// Step 2: Is the block signed by a valid signatory?
 	signatoryPubKey, err := dbGetPublicKey(blk.SignaturePublicKeyHash)
 	if err != nil {
-		return fmt.Errorf("Cannot find an accepted public key %s signing the block", blk.SignaturePublicKeyHash)
+		return 0, fmt.Errorf("Cannot find an accepted public key %s signing the block", blk.SignaturePublicKeyHash)
 	}
 	if signatoryPubKey.isRevoked {
-		return fmt.Errorf("The public key %s signing the block is revoked on %v", blk.SignaturePublicKeyHash, signatoryPubKey.timeRevoked)
+		return 0, fmt.Errorf("The public key %s signing the block is revoked on %v", blk.SignaturePublicKeyHash, signatoryPubKey.timeRevoked)
 	}
 	sigPubKey, err := cryptoDecodePublicKeyBytes(signatoryPubKey.publicKeyBytes)
 	if err != nil {
-		return fmt.Errorf("Cannot decode public key %s: %v", blk.SignaturePublicKeyHash, err)
+		return 0, fmt.Errorf("Cannot decode public key %s: %v", blk.SignaturePublicKeyHash, err)
 	}
 	err = cryptoVerifyHexBytes(sigPubKey, blk.PreviousBlockHash, blk.PreviousBlockHashSignature)
 	if err != nil {
-		return fmt.Errorf("Verification of previous block hash has failed: %v", err)
+		return 0, fmt.Errorf("Verification of previous block hash has failed: %v", err)
 	}
 	err = cryptoVerifyHexBytes(sigPubKey, blk.Hash, blk.HashSignature)
 	if err != nil {
-		return fmt.Errorf("Verification of block hash has failed: %v", err)
+		return 0, fmt.Errorf("Verification of block hash has failed: %v", err)
 	}
 	allKeyOps, err := blk.dbGetKeyOps()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	thisBlockHeight := prevBlk.Height + 1
 	targetQuorum := QuorumForHeight(thisBlockHeight)
 	for key, keyOps := range allKeyOps {
 		if len(keyOps) < targetQuorum {
-			return fmt.Errorf("Quorum of %d not met for key ops on key %s", targetQuorum, key)
+			return 0, fmt.Errorf("Quorum of %d not met for key ops on key %s", targetQuorum, key)
 		}
 		for _, keyOp := range keyOps {
 			signatoryPubKey, err = dbGetPublicKey(keyOp.signatureKeyHash)
 			if err != nil {
-				return fmt.Errorf("Error retrieving supposedly key op signatory %s", keyOp.signatureKeyHash)
+				return 0, fmt.Errorf("Error retrieving supposedly key op signatory %s", keyOp.signatureKeyHash)
 			}
 			sigPubKey, err := cryptoDecodePublicKeyBytes(signatoryPubKey.publicKeyBytes)
 			if err != nil {
-				return fmt.Errorf("Cannot decode public key %s: %v", signatoryPubKey.publicKeyHash, err)
+				return 0, fmt.Errorf("Cannot decode public key %s: %v", signatoryPubKey.publicKeyHash, err)
 			}
 			err = cryptoVerifyPublicKeyHashSignature(sigPubKey, key, keyOp.signature)
 			if err != nil {
-				return fmt.Errorf("Failed verification of key op for %s by %s", key, keyOp.signatureKeyHash)
+				return 0, fmt.Errorf("Failed verification of key op for %s by %s", key, keyOp.signatureKeyHash)
 			}
 		}
 		// At this point, all required signatures have been verified
@@ -334,24 +334,25 @@ func checkAcceptBlock(blk *Block) error {
 			// Add the key to the list of valid signatories. But first, check if it already exists.
 			_, err := dbGetPublicKey(key)
 			if err == nil {
-				return fmt.Errorf("Attempt to add an already existing key to the list of signatores")
+				return 0, fmt.Errorf("Attempt to add an already existing key to the list of signatores")
 			}
 			dbWritePublicKey(keyOps[0].publicKeyBytes, key, thisBlockHeight)
 		} else if keyOps[0].op == "R" {
 			// Revoke the key. But first, check if it's already revoked.
 			dbpk, err := dbGetPublicKey(key)
 			if err != nil {
-				return fmt.Errorf("Cannot retrieve key to revoke: %s", key)
+				return 0, fmt.Errorf("Cannot retrieve key to revoke: %s", key)
 			}
 			if dbpk.isRevoked {
-				return fmt.Errorf("Attempt to revoke a key which is already revoked: %s", key)
+				return 0, fmt.Errorf("Attempt to revoke a key which is already revoked: %s", key)
 			}
 			dbRevokePublicKey(key)
 		} else {
-			return fmt.Errorf("Invalid key op: %s", keyOps[0].op)
+			return 0, fmt.Errorf("Invalid key op: %s", keyOps[0].op)
 		}
 	}
-	return nil
+	// Everything's ok, the block is ok to import.
+	return thisBlockHeight, nil
 }
 
 // QuorumForHeight calculates the required key op quorum for the given block height

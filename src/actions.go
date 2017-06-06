@@ -75,13 +75,14 @@ func actionSignImportBlock(fn string) {
 	newBlock := DbBlockchainBlock{Hash: blockHashHex, HashSignature: blockHashSignature, PreviousBlockHash: dbb.Hash, PreviousBlockHashSignature: previousBlockHashSignature,
 		Version: CurrentBlockVersion, SignaturePublicKeyHash: pkdb.publicKeyHash, Height: newBlockHeight, TimeAccepted: time.Now()}
 
+	err = blockchainCopyFile(fn, newBlockHeight)
+	if err != nil {
+		log.Panic(err)
+	}
+
 	err = dbInsertBlock(&newBlock)
 	if err != nil {
 		log.Panic(err)
 	}
 
-	err = blockchainCopyFile(fn, newBlockHeight)
-	if err != nil {
-		log.Panic(err)
-	}
 }
