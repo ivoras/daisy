@@ -8,7 +8,7 @@ What if public (government) documents were distributed in this way...? What if W
 
 # Current status
 
-Basic crypto, block and db operations are implemented, the network part is still pending.
+Basic crypto, block and db operations are implemented, the network part is mostly done. Db queries are pending.
 
 ## ToDo
 
@@ -22,14 +22,14 @@ Basic crypto, block and db operations are implemented, the network part is still
 
 *Note:* All this is fluid and can be changed as development progresses.
 
-* Everyone can download the blockchain, only special "miners" can create ones, in a sort-of web-of-trust way. Those nodes who are able to create new blocks are called "signatories."
+* Everyone can download the blockchain, only special "miners" can create ones, in a sort-of web-of-trust way. Those nodes who are able to create new blocks are called "signatories." They are in posssion of an accepted private key.
 * Block payloads are SQLite database files. Except for special metadata tables, their content is not enforced.
 * Blockchain metadata is mostly separate from the block payloads, with some obvious exceptions such as the block hash. Metadata critical for blockchain integrity (like the previous block's hash (merkle)is within the block database)
-* Consensus rules:
+* Consensus rules for accepting new blocks:
     * The validity of the SQLite files
     * The presence of a special tables named `_meta` and `keys`,
     * The validity of the previous block hash in the `_meta` table
-    * The previous block hash is signed with a key which is one of the signatories, i.e. which is present in the previous blocks' `_keys` table.
+    * The previous block hash is signed with a key which is one of the accepted private keys, i.e. signatories, i.e. which is present in the previous blocks' `_keys` table.
     * The `_keys` table contains new signatory keys additions and revocations. Both operations must be signed by a number of currently valid signatories, where the
       number is given as "1 if height < 149 else floor(log(height)*2)"
     * Longest chain wins.
