@@ -89,7 +89,7 @@ const peersTableCreate = `
 CREATE TABLE peers (
 	address			VARCHAR NOT NULL PRIMARY KEY,	-- in the format "address:port", lowercase
 	time_added		INTEGER NOT NULL, -- time last seen
-	permanent		BOOLEAN NOT NULL DEFAULT false
+	permanent		BOOLEAN NOT NULL DEFAULT 0
 );
 `
 
