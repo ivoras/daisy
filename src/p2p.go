@@ -343,6 +343,7 @@ func (p2pc *p2pConnection) handleBlockHashes(msg StrIfMap) {
 			log.Println("Already have block", h)
 			continue
 		}
+		log.Println("Requesting block", hashes[h])
 		msg := p2pMsgGetBlockStruct{
 			p2pMsgHeader: p2pMsgHeader{
 				P2pID: p2pEphemeralID,
