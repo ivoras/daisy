@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"strconv"
 	"time"
@@ -20,6 +22,9 @@ func processActions() bool {
 			log.Fatal("Not enough arguments: expecting sqlite db filename")
 		}
 		actionSignImportBlock(flag.Arg(1))
+		return true
+	case "query":
+		actionQuery(flag.Arg(1))
 		return true
 	}
 	return false
@@ -85,4 +90,48 @@ func actionSignImportBlock(fn string) {
 		log.Panic(err)
 	}
 
+}
+
+func actionQuery(q string) {
+	log.Println("Running query:", q)
+	errCount := 0
+	for h := 1; h <= dbGetBlockchainHeight(); h++ {
+		fn := blockchainGetFilename(h)
+		db, err := dbOpen(fn, true)
+		if err != nil {
+			log.Panic(err)
+		}
+		rows, err := db.Query(q)
+		if err != nil {
+			errCount++
+			continue
+		}
+		cols, err := rows.Columns()
+		if err != nil {
+			log.Panic(err)
+		}
+		for rows.Next() {
+			columns := make([]interface{}, len(cols))
+			columnPointers := make([]interface{}, len(cols))
+			for i := range columns {
+				columnPointers[i] = &columns[i]
+			}
+			if err := rows.Scan(columnPointers...); err != nil {
+				log.Panic(err)
+			}
+			row := make(map[string]interface{})
+			for i, colName := range cols {
+				val := columnPointers[i].(*interface{})
+				row[colName] = *val
+			}
+			buf, err := json.Marshal(row)
+			if err != nil {
+				log.Panic(err)
+			}
+			fmt.Println(string(buf))
+		}
+	}
+	if errCount != 0 {
+		log.Println("There have been", errCount, "errors.")
+	}
 }
