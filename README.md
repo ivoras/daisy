@@ -6,6 +6,21 @@ What if there is a blockchain where only certain nodes, in possession of one of 
 
 What if public (government) documents were distributed in this way...? What if Wikipedia was...?
 
+# Usage
+
+When started, Daisy will initialise its databases and install the default (and currently the only one) blockchain. It will then connect to a list of peers it maintains and fetch new blocks, if any.
+
+Since this is a private blockchain, not everyone has the ability to create new blocks. I'm thinking of this as a more of a framework for creating new blockchains. If you want to contribute to the default blockchain (i.e. store data, i.e. add new sqlite databases to the blockchain), run the `./daisy mykeys` command, send me the public key hash to sign, and an explanation / introductory letter saying why and what do you want to do with it, and I'll sign your key and accept it into the blockchain as one of the signatories.
+
+Some possible use cases I've thought of for blockchains where everyone can download and verify the data, but only a few parties can publish:
+
+* Distributing academic articles: create a new blockchain for academic institutions (and Arxiv and such) and allow them to push blocks with articles into the blockchain.
+* Distributing municipal and governmental records: each institution / agency could be allowed to publish blocks with records and documents into the blockchain.
+* Distributing scientific data: only certified research institutions publish data into the blockchain.
+* Distributing sports / betting / lottery results
+* Wikileaks, of course
+* Making a gigantic world-wide database of e.g. product information: manufacturs could add information about their products, keyed on e.g. UPC codes
+
 # Current status
 
 Basic crypto, block and db operations are implemented, the network part is mostly done. Db queries are pending.
@@ -80,3 +95,9 @@ A table of quorums required for specific block heights is:
 ```
 
 E.g. for block 100000, 23 signatures are required to accept a new signature.
+
+# Basic crypto
+
+ECDSA P-256 is used for public key crypto operations.
+
+Strings refered in Daisy as "public keys" are SHA256 hashes of public keys and begin with the string "1:" (the 1 is to indicate a key type, should it need to change in the future). They look like "1:9569f0894e3d2b435a4c49c6a97501f4191b9729ff53be5acee2c7bd4be0e439".
