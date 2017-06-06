@@ -127,3 +127,60 @@ func (m StrIfMap) GetIntStringMap(key string) (map[int]string, error) {
 	}
 	return val2, nil
 }
+
+type StringSetWithExpiry struct {
+	data map[string]time.Time
+	age  time.Duration
+	lock WithMutex
+}
+
+func NewStringSetWithExpiry(d time.Duration) *StringSetWithExpiry {
+	ss := StringSetWithExpiry{data: make(map[string]time.Time), age: d}
+	return &ss
+}
+
+func (ss *StringSetWithExpiry) Add(s string) {
+	ss.lock.With(func() {
+		ss.data[s] = time.Now()
+	})
+	ss.CheckExpire()
+}
+
+func (ss *StringSetWithExpiry) CheckExpire() int {
+	count := 0
+	ss.lock.With(func() {
+		var toExpire []string
+		for s, t := range ss.data {
+			d := time.Since(t)
+			if d >= ss.age {
+				toExpire = append(toExpire, s)
+			}
+		}
+		for _, s := range toExpire {
+			delete(ss.data, s)
+		}
+		count = len(toExpire)
+	})
+	return count
+}
+
+func (ss *StringSetWithExpiry) Has(s string) bool {
+	var ok bool
+	ss.lock.With(func() {
+		_, ok = ss.data[s]
+	})
+	return ok
+}
+
+// TestAndSet atomically tests if the string s is in the set and adds it if it isn't.
+// Returns true iff it was in the set.
+func (ss *StringSetWithExpiry) TestAndSet(s string) bool {
+	var ok bool
+	ss.lock.With(func() {
+		_, ok = ss.data[s]
+		if !ok {
+			ss.data[s] = time.Now()
+		}
+	})
+	return ok
+}

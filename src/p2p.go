@@ -340,7 +340,10 @@ func (p2pc *p2pConnection) handleBlockHashes(msg StrIfMap) {
 	sort.Ints(heights)
 	for h := range heights {
 		if dbBlockHeightExists(h) {
-			log.Println("Already have block", h)
+			//log.Println("Already have block", h)
+			continue
+		}
+		if p2pCoordinator.recentlyRequestedBlocks.TestAndSet(hashes[h]) {
 			continue
 		}
 		log.Println("Requesting block", hashes[h])
@@ -430,7 +433,7 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 		return
 	}
 	if dbBlockHashExists(hash) {
-		log.Println("Replacing / orphaning blocks not yet implemented")
+		log.Println("Replacing blocks not yet implemented")
 		return
 	}
 	fileSize, err := msg.GetInt64("size")
@@ -502,9 +505,10 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 type p2pCoordinatorType struct {
 	timeTicks                chan int
 	lastTickBlockchainHeight int
+	recentlyRequestedBlocks  *StringSetWithExpiry
 }
 
-var p2pCoordinator = p2pCoordinatorType{}
+var p2pCoordinator = p2pCoordinatorType{recentlyRequestedBlocks: NewStringSetWithExpiry(5 * time.Second)}
 
 func (co *p2pCoordinatorType) Run() {
 	co.lastTickBlockchainHeight = dbGetBlockchainHeight()
