@@ -615,7 +615,7 @@ func (co *p2pCoordinatorType) handleDiscoverPeers(addresses []string) {
 			host = address
 		}
 		canonicalAddress := fmt.Sprintf("%s:%d", host, DefaultP2PPort)
-		if co.badPeers.Has(canonicalAddress) {
+		if p2pPeers.HasAddress(canonicalAddress) || co.badPeers.Has(canonicalAddress) {
 			continue
 		}
 		addr, err := net.ResolveTCPAddr("tcp", canonicalAddress)
