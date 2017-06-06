@@ -88,7 +88,8 @@ CREATE TABLE config (
 const peersTableCreate = `
 CREATE TABLE peers (
 	address			VARCHAR NOT NULL PRIMARY KEY,	-- in the format "address:port", lowercase
-	time_added		INTEGER NOT NULL -- time last seen
+	time_added		INTEGER NOT NULL, -- time last seen
+	permanent		BOOLEAN NOT NULL DEFAULT false
 );
 `
 
@@ -150,7 +151,7 @@ func dbInit() {
 			log.Panic(err)
 		}
 		for peer := range bootstrapPeers {
-			_, err = mainDb.Exec("INSERT INTO peers(address, time_added) VALUES (?, ?)", peer, getNowUTC())
+			_, err = mainDb.Exec("INSERT INTO peers(address, time_added, permanent) VALUES (?, ?, ?)", peer, getNowUTC(), true)
 			if err != nil {
 				log.Panic(err)
 			}
