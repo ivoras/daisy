@@ -10,7 +10,15 @@ What if public (government) documents were distributed in this way...? What if W
 
 When started, Daisy will initialise its databases and install the default (and currently the only one) blockchain. It will then connect to a list of peers it maintains and fetch new blocks, if any.
 
+## Querying the blockchain
+
+All the blocks in the blockchain can be queried by using a command such as `./daisy query SELECT COUNT(*) FROM wikinews_titles`. This will iterate over all the blocks, and in those blocks where the query is successfull, will output the results to stdout as JSON objects separated by newlines.
+
+## Adding data to the blockchain
+
 Since this is a private blockchain, not everyone has the ability to create new blocks. I'm thinking of this as a more of a framework for creating new blockchains. If you want to contribute to the default blockchain (i.e. store data, i.e. add new sqlite databases to the blockchain), run the `./daisy mykeys` command, send me the public key hash to sign, and an explanation / introductory letter saying why and what do you want to do with it, and I'll sign your key and accept it into the blockchain as one of the signatories.
+
+## Intended uses
 
 Some possible use cases I've thought of for blockchains where everyone can download and verify the data, but only a few parties can publish:
 
