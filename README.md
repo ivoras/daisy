@@ -10,6 +10,8 @@ What if public (government) documents were distributed in this way...? What if W
 
 Basic crypto, block and db operations are implemented, the network part is mostly done. Db queries are pending.
 
+This is mostly alpha quality code.
+
 ## ToDo
 
 * Implement nicer error handling when replying to messages
