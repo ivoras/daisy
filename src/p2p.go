@@ -130,6 +130,19 @@ func (p *p2pPeersSet) Remove(c *p2pConnection) {
 	})
 }
 
+func (p *p2pPeersSet) HasAddress(address string) bool {
+	found := false
+	p.lock.With(func() {
+		for peer := range p.peers {
+			if peer.address == address {
+				found = true
+				break
+			}
+		}
+	})
+	return found
+}
+
 func p2pServer() {
 	serverAddress := ":" + strconv.Itoa(cfg.P2pPort)
 	l, err := net.Listen("tcp", serverAddress)
@@ -153,17 +166,7 @@ func p2pServer() {
 }
 
 func p2pClient() {
-	peers := dbGetSavedPeers()
-	for peer := range peers {
-		conn, err := net.Dial("tcp", peer)
-		if err != nil {
-			log.Println("Error connecting to", peer, err)
-			continue
-		}
-		p2pc := p2pConnection{conn: conn, address: peer}
-		p2pPeers.Add(&p2pc)
-		go p2pc.handleConnection()
-	}
+	p2pCoordinator.connectDbPeers()
 }
 
 func (p2pc *p2pConnection) sendMsg(msg interface{}) error {
@@ -506,9 +509,13 @@ type p2pCoordinatorType struct {
 	timeTicks                chan int
 	lastTickBlockchainHeight int
 	recentlyRequestedBlocks  *StringSetWithExpiry
+	lastReconnectTime        time.Time
 }
 
-var p2pCoordinator = p2pCoordinatorType{recentlyRequestedBlocks: NewStringSetWithExpiry(5 * time.Second)}
+var p2pCoordinator = p2pCoordinatorType{
+	recentlyRequestedBlocks: NewStringSetWithExpiry(5 * time.Second),
+	lastReconnectTime:       time.Now(),
+}
 
 func (co *p2pCoordinatorType) Run() {
 	co.lastTickBlockchainHeight = dbGetBlockchainHeight()
@@ -555,6 +562,9 @@ func (co *p2pCoordinatorType) handleTimeTick() {
 		co.floodPeersWithNewBlocks(co.lastTickBlockchainHeight, newHeight)
 		co.lastTickBlockchainHeight = newHeight
 	}
+	if time.Since(co.lastReconnectTime) >= 10*time.Minute {
+		co.lastReconnectTime = time.Now()
+	}
 }
 
 func (co *p2pCoordinatorType) floodPeersWithNewBlocks(minHeight, maxHeight int) {
@@ -572,4 +582,21 @@ func (co *p2pCoordinatorType) floodPeersWithNewBlocks(minHeight, maxHeight int) 
 			p2pc.sendMsg(msg)
 		}
 	})
+}
+
+func (co *p2pCoordinatorType) connectDbPeers() {
+	peers := dbGetSavedPeers()
+	for peer := range peers {
+		if p2pPeers.HasAddress(peer) {
+			continue
+		}
+		conn, err := net.Dial("tcp", peer)
+		if err != nil {
+			log.Println("Error connecting to", peer, err)
+			continue
+		}
+		p2pc := p2pConnection{conn: conn, address: peer}
+		p2pPeers.Add(&p2pc)
+		go p2pc.handleConnection()
+	}
 }
