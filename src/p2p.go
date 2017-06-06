@@ -160,6 +160,10 @@ func p2pServer() {
 			sysEventChannel <- sysEventMessage{event: eventQuit}
 			return
 		}
+		if p2pCoordinator.badPeers.Has(conn.RemoteAddr().String()) {
+			log.Println("Ignoring bad peer", conn.RemoteAddr().String())
+			continue
+		}
 		p2pc := p2pConnection{conn: conn, address: conn.RemoteAddr().String()}
 		p2pPeers.Add(&p2pc)
 		go p2pc.handleConnection()
@@ -293,6 +297,7 @@ func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 		dup = true
 	}
 	if dup {
+		p2pCoordinator.badPeers.Add(p2pc.address)
 		p2pc.conn.Close()
 		return
 	}
@@ -516,6 +521,7 @@ func (p2pc *p2pConnection) checkSavePeer() {
 	if err != nil {
 		return
 	}
+	// Detect if there's a canonical peer on the other side, somewhat brute-forceish
 	conn, err := net.DialTCP("tcp", nil, addr)
 	if err != nil {
 		return
@@ -533,12 +539,14 @@ type p2pCoordinatorType struct {
 	lastTickBlockchainHeight int
 	recentlyRequestedBlocks  *StringSetWithExpiry
 	lastReconnectTime        time.Time
+	badPeers                 *StringSetWithExpiry
 }
 
 var p2pCoordinator = p2pCoordinatorType{
 	recentlyRequestedBlocks: NewStringSetWithExpiry(5 * time.Second),
 	lastReconnectTime:       time.Now(),
 	timeTicks:               make(chan int),
+	badPeers:                NewStringSetWithExpiry(15 * time.Minute),
 }
 
 func (co *p2pCoordinatorType) Run() {
@@ -587,7 +595,7 @@ func (co *p2pCoordinatorType) handleTimeTick() {
 		co.floodPeersWithNewBlocks(co.lastTickBlockchainHeight, newHeight)
 		co.lastTickBlockchainHeight = newHeight
 	}
-	if time.Since(co.lastReconnectTime) >= 1*time.Minute {
+	if time.Since(co.lastReconnectTime) >= 10*time.Minute {
 		co.lastReconnectTime = time.Now()
 		co.connectDbPeers()
 	}
@@ -614,6 +622,9 @@ func (co *p2pCoordinatorType) connectDbPeers() {
 	peers := dbGetSavedPeers()
 	for peer := range peers {
 		if p2pPeers.HasAddress(peer) {
+			continue
+		}
+		if co.badPeers.Has(peer) {
 			continue
 		}
 		conn, err := net.Dial("tcp", peer)

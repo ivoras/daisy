@@ -167,7 +167,14 @@ func (ss *StringSetWithExpiry) CheckExpire() int {
 func (ss *StringSetWithExpiry) Has(s string) bool {
 	var ok bool
 	ss.lock.With(func() {
-		_, ok = ss.data[s]
+		var t time.Time
+		t, ok = ss.data[s]
+		if ok {
+			if time.Since(t) >= ss.age {
+				// It's there but it's expired.
+				ok = false
+			}
+		}
 	})
 	return ok
 }
@@ -177,9 +184,15 @@ func (ss *StringSetWithExpiry) Has(s string) bool {
 func (ss *StringSetWithExpiry) TestAndSet(s string) bool {
 	var ok bool
 	ss.lock.With(func() {
-		_, ok = ss.data[s]
+		var t time.Time
+		t, ok = ss.data[s]
 		if !ok {
 			ss.data[s] = time.Now()
+		} else {
+			if time.Since(t) >= ss.age {
+				// It's there but it's expired.
+				ok = false
+			}
 		}
 	})
 	return ok
