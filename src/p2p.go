@@ -33,8 +33,9 @@ const p2pMsgHello = "hello"
 
 type p2pMsgHelloStruct struct {
 	p2pMsgHeader
-	Version     string `json:"version"`
-	ChainHeight int    `json:"chain_height"`
+	Version     string   `json:"version"`
+	ChainHeight int      `json:"chain_height"`
+	MyPeers     []string `json:"my_peers"`
 }
 
 // The message asking for block hashes
@@ -108,6 +109,7 @@ var p2pPeers = p2pPeersSet{peers: make(map[*p2pConnection]time.Time)}
 const (
 	p2pCtrlSearchForBlocks = iota
 	p2pCtrlHaveNewBlock
+	p2pCtrlDiscoverPeers
 )
 
 type p2pCtrlMessage struct {
@@ -142,6 +144,16 @@ func (p *p2pPeersSet) HasAddress(address string) bool {
 		}
 	})
 	return found
+}
+
+func (p *p2pPeersSet) GetAddresses() []string {
+	var addresses []string
+	p.lock.With(func() {
+		for peer := range p.peers {
+			addresses = append(addresses, peer.address)
+		}
+	})
+	return addresses
 }
 
 func p2pServer() {
@@ -213,6 +225,7 @@ func (p2pc *p2pConnection) handleConnection() {
 		},
 		Version:     p2pClientVersionString,
 		ChainHeight: dbGetBlockchainHeight(),
+		MyPeers:     p2pPeers.GetAddresses(),
 	}
 	err := p2pc.sendMsg(helloMsg)
 	if err != nil {
@@ -279,6 +292,9 @@ func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 			log.Println(p2pc.conn, err)
 			return
 		}
+	}
+	if remotePeers, err := msg.GetStringList("my_peers"); err == nil {
+		p2pCtrlChannel <- p2pCtrlMessage{msgType: p2pCtrlDiscoverPeers, payload: remotePeers}
 	}
 	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.conn, ver, p2pc.peerID, p2pc.chainHeight)
 	// Check for duplicates
@@ -558,6 +574,8 @@ func (co *p2pCoordinatorType) Run() {
 			switch msg.msgType {
 			case p2pCtrlSearchForBlocks:
 				co.handleSearchForBlocks(msg.payload.(*p2pConnection))
+			case p2pCtrlDiscoverPeers:
+				co.handleDiscoverPeers(msg.payload.([]string))
 			}
 		case <-co.timeTicks:
 			co.handleTimeTick()
@@ -585,6 +603,36 @@ func (co *p2pCoordinatorType) handleSearchForBlocks(p2pcStart *p2pConnection) {
 		MaxBlockHeight: p2pcStart.chainHeight,
 	}
 	p2pcStart.sendMsg(msg)
+}
+
+func (co *p2pCoordinatorType) handleDiscoverPeers(addresses []string) {
+	for _, address := range addresses {
+		i := strings.LastIndex(address, ":")
+		var host string
+		if i > -1 {
+			host = address[0:i]
+		} else {
+			host = address
+		}
+		canonicalAddress := fmt.Sprintf("%s:%d", host, DefaultP2PPort)
+		if co.badPeers.Has(canonicalAddress) {
+			continue
+		}
+		addr, err := net.ResolveTCPAddr("tcp", canonicalAddress)
+		if err != nil {
+			return
+		}
+		// Detect if there's a canonical peer on the other side, somewhat brute-forceish
+		conn, err := net.DialTCP("tcp", nil, addr)
+		if err != nil {
+			return
+		}
+		p2pc := p2pConnection{conn: conn, address: canonicalAddress}
+		p2pPeers.Add(&p2pc)
+		go p2pc.handleConnection()
+		log.Println("Detected canonical peer at", canonicalAddress)
+		dbSavePeer(canonicalAddress)
+	}
 }
 
 // Executed periodically to perform time-dependant actions. Do not rely on the

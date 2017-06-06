@@ -128,6 +128,27 @@ func (m StrIfMap) GetIntStringMap(key string) (map[int]string, error) {
 	return val2, nil
 }
 
+func (m StrIfMap) GetStringList(key string) ([]string, error) {
+	var ok bool
+	var ii interface{}
+	if ii, ok = m[key]; !ok {
+		return nil, fmt.Errorf("No '%s' key in map", key)
+	}
+	var ilist []interface{}
+	if ilist, ok = ii.([]interface{}); !ok {
+		return nil, fmt.Errorf("The '%s' key in map is not an array of interface{}", key)
+	}
+	var result []string
+	for n, is := range ilist {
+		var s string
+		if s, ok = is.(string); !ok {
+			return nil, fmt.Errorf("Element of %d the '%s' key is not a string", n, key)
+		}
+		result = append(result, s)
+	}
+	return result, nil
+}
+
 type StringSetWithExpiry struct {
 	data map[string]time.Time
 	age  time.Duration
