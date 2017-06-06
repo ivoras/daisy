@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"time"
 )
@@ -17,14 +18,20 @@ func processActions() bool {
 	}
 	cmd := flag.Arg(0)
 	switch cmd {
+	case "help":
+		actionHelp()
+		return true
+	case "mykeys":
+		actionMyKeys()
+		return true
+	case "query":
+		actionQuery(flag.Arg(1))
+		return true
 	case "signimportblock":
 		if flag.NArg() < 2 {
 			log.Fatal("Not enough arguments: expecting sqlite db filename")
 		}
 		actionSignImportBlock(flag.Arg(1))
-		return true
-	case "query":
-		actionQuery(flag.Arg(1))
 		return true
 	}
 	return false
@@ -133,5 +140,21 @@ func actionQuery(q string) {
 	}
 	if errCount != 0 {
 		log.Println("There have been", errCount, "errors.")
+	}
+}
+
+func actionHelp() {
+	fmt.Printf("usage: %s [flags] [command]\n", os.Args[0])
+	flag.PrintDefaults()
+	fmt.Println("Commands:")
+	fmt.Println("\thelp\t\tShows this help message")
+	fmt.Println("\tmykeys\t\tShows a list of my public keys")
+	fmt.Println("\tquery\t\tExecutes a SQL query on the blockchain (expects 1 argument: SQL query)")
+	fmt.Println("\tsignimportblock\tSigns a block (creates metadata tables in it first) and imports it into the blockchain (expects 1 argument: a sqlite db filename)")
+}
+
+func actionMyKeys() {
+	for _, k := range dbGetMyPublicKeys() {
+		fmt.Println(k)
 	}
 }

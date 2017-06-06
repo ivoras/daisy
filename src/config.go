@@ -23,6 +23,7 @@ var cfg struct {
 	configFile string
 	P2pPort    int    `json:"p2p_port"`
 	DataDir    string `json:"data_dir"`
+	showHelp   bool
 }
 
 func configInit() {
@@ -51,7 +52,13 @@ func configInit() {
 	// Then override the configuration with command-line flags
 	flag.IntVar(&cfg.P2pPort, "port", cfg.P2pPort, "P2P port")
 	flag.StringVar(&cfg.DataDir, "dir", cfg.DataDir, "Data directory")
+	flag.BoolVar(&cfg.showHelp, "help", false, "Shows CLI usage information")
 	flag.Parse()
+
+	if cfg.showHelp {
+		actionHelp()
+		os.Exit(0)
+	}
 
 	if _, err := os.Stat(cfg.DataDir); err != nil {
 		log.Println("Data directory", cfg.DataDir, "doesn't exist, creating.")

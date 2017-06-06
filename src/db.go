@@ -233,8 +233,25 @@ func dbRevokePublicKey(hash string) {
 func dbWritePrivateKey(privkey []byte, hash string) {
 	_, err := privateDb.Exec("INSERT INTO privkeys(pubkey_hash, privkey, time_added) VALUES (?, ?, ?)", hash, hex.EncodeToString(privkey), time.Now().Unix())
 	if err != nil {
-		log.Panicln(err)
+		log.Panic(err)
 	}
+}
+
+func dbGetMyPublicKeys() []string {
+	var result []string
+	rows, err := privateDb.Query("SELECT pubkey_hash FROM privkeys")
+	if err != nil {
+		log.Panic(err)
+	}
+	for rows.Next() {
+		var pubkeyHash string
+		err := rows.Scan(&pubkeyHash)
+		if err != nil {
+			log.Panic(err)
+		}
+		result = append(result, pubkeyHash)
+	}
+	return result
 }
 
 func dbGetBlockchainHeight() int {
