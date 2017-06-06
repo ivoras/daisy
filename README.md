@@ -12,7 +12,7 @@ When started, Daisy will initialise its databases and install the default (and c
 
 ## Querying the blockchain
 
-All the blocks in the blockchain can be queried by using a command such as `./daisy query SELECT COUNT(*) FROM wikinews_titles`. This will iterate over all the blocks, and in those blocks where the query is successfull, will output the results to stdout as JSON objects separated by newlines.
+All the blocks in the blockchain can be queried by using a command such as `./daisy query "SELECT COUNT(*) FROM wikinews_titles"` (note the quotes!). This will iterate over all the blocks, and in those blocks where the query is successfull, will output the results to stdout as JSON objects separated by newlines.
 
 ## Adding data to the blockchain
 
