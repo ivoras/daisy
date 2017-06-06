@@ -23,7 +23,7 @@ var startTime = time.Now()
 
 func main() {
 	rand.Seed(p2pEphemeralID + getNowUTC()) // Initialise weak RNG with strong RNG
-	log.Println("Starting up...")
+	log.Println("Starting up", p2pClientVersionString, "...")
 	sigChannel := make(chan os.Signal, 1)
 	signal.Notify(sigChannel, syscall.SIGINT)
 

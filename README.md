@@ -18,6 +18,8 @@ All the blocks in the blockchain can be queried by using a command such as `./da
 
 Since this is a private blockchain, not everyone has the ability to create new blocks. I'm thinking of this as a more of a framework for creating new blockchains. If you want to contribute to the default blockchain (i.e. store data, i.e. add new sqlite databases to the blockchain), run the `./daisy mykeys` command, send me the public key hash to sign, and an explanation / introductory letter saying why and what do you want to do with it, and I'll sign your key and accept it into the blockchain as one of the signatories.
 
+When you have a private key whose public part is added to the list of signatories, running `./daisy signimportblock mydata.db` will import the mydata.db file into the blockchain. Before it's imported, the database is modified to contain the Daisy metadata tables.
+
 ## Intended uses
 
 Some possible use cases I've thought of for blockchains where everyone can download and verify the data, but only a few parties can publish:
