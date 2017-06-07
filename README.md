@@ -53,6 +53,14 @@ This is mostly alpha quality code.
 * Flood-based p2p network: every node can request a list of known connections from the other nodes.
 * Each message contains the genesis (root) block hash, so technically multiple chains can safely communicate on the same TCP port
 
+### Random thoughts and blue-Moon wishes
+
+* How to deal with blockchain abuse? I.e. one of the signatories turns out to be an adversary? Some ideas:
+
+  * Limit the amount of data (in bytes) a signatory can add by the signatorie's age (i.e. the longer the key is approved, the more data it can add). This offers absolutely no protection against "sleepers" which turn out to be adversaries after enough time has passed.
+  * Require multiple signatures on blocks, which offers no protection against a clique of adversaries, and inconveniences the common use case where there are indeed individul authoritative sources of data.
+  * Create a cryptocurrency overlay on the blockchain (possibly using external cryptocurrencies, tokens) where adding data becomes expensive - which doesn't protect against a well-funded adversary.
+
 ## How blocks are created
 
 Blocks are SQLite database files. Every party in posession of an *accepted private key* can create new blocks and sign them. Blocks are accepted (if other criteria are satisfied) only if they are signed by one of the accepted keys.
