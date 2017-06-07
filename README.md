@@ -73,7 +73,7 @@ This is mostly alpha quality code.
 
 ## How blocks are created
 
-Blocks are SQLite database files. Every party in posession of an *accepted private key* can create new blocks and sign them. Blocks are accepted (if other criteria are satisfied) only if they are signed by one of the accepted keys.
+Blocks are SQLite database files. Every party in posession of an *accepted private key* (i.e. a signatory) can create new blocks and sign them. Blocks are accepted (if other criteria are satisfied) only if they are signed by one of the accepted keys.
 
 New blocks can contain operations which add or remove keys from a (global) list of accepted keys, if they contain a sufficient number of signatures from a list of already accepted keys. See the `_keys` table description in the section on Block metadata.
 
