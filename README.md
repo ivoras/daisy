@@ -33,14 +33,14 @@ Some possible use cases I've thought of for blockchains where everyone can downl
 
 # Current status
 
-Basic crypto, block and db operations are implemented, the network part is mostly done. Db queries are pending.
+Basic crypto, block and db operations are implemented, the network part is mostly done. A simple form of DB queries is done. Automated key management operations (i.e. signing someone else's key) are pending (they're manual now).
 
-This is mostly alpha quality code.
+*WARNING:* This is mostly alpha quality code.
 
 ## ToDo
 
 * Implement nicer error handling when replying to messages
-* Refactor db* and blockchain* into struct methods
+* Refactor db..., action... and blockchain... funcs into struct methods
 * Implement the "URL" encoding for block transfers: so the data in the JSON messages isn't block data, but an URL to the block data.
 * Implement a Bloom filter for tables in SQL queries, to skip querying blocks which don't have the appropriate tables.
 * Implement stochastic guarded block importing: if there apparently is a new block in the network: ask a number of peers if they've seen it before importing it.
