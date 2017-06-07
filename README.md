@@ -80,7 +80,7 @@ New blocks can contain operations which add or remove keys from a (global) list 
 SQLite database files have some soft and hard restrictions:
 
 * The databases MUST NOT be created with the "WAL" journal mode. They SHOULD be created with the "OFF" journal mode.
-* The databases SHOULD be created with the smalles possible page size, i.e. 512 bytes.
+* The databases SHOULD be created with the smallest possible page size, i.e. 512 bytes.
 
 ## Block metadata
 
