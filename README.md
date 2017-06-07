@@ -77,7 +77,7 @@ Blocks are SQLite database files. Every party in posession of an *accepted priva
 
 New blocks can contain operations which add or remove keys from a (global) list of accepted keys, if they contain a sufficient number of signatures from a list of already accepted keys. See the `_keys` table description in the section on Block metadata.
 
-SQLite database files have some soft and hard restrictions:
+To be accepted as blocks, the SQLite database files have some soft and hard restrictions:
 
 * The databases MUST NOT be created with the "WAL" journal mode. They SHOULD be created with the "OFF" journal mode.
 * The databases SHOULD be created with the smallest possible page size, i.e. 512 bytes.
