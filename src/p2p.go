@@ -309,7 +309,7 @@ func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 		}
 	})
 	if p2pc.peerID == p2pEphemeralID {
-		log.Printf("%v is apperently myself (%x). Dropping it.", p2pc.conn, p2pc.peerID)
+		log.Printf("%v is apparently myself (%x). Dropping it.", p2pc.conn, p2pc.peerID)
 		dup = true
 	}
 	if dup {
