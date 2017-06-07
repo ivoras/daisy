@@ -34,14 +34,14 @@ Some possible use cases I've thought of for blockchains where everyone can downl
 
 # Current status
 
-Basic crypto, block and db operations are implemented, the network part is mostly done. Db queries are pending.
+Basic crypto, block and db operations are implemented, the network part is mostly done. A simple form of DB queries is done. Automated key management operations (i.e. signing someone else's key) are pending (they're manual now).
 
-This is mostly alpha quality code.
+*WARNING:* This is mostly alpha quality code.
 
 ## ToDo
 
 * Implement nicer error handling when replying to messages
-* Refactor db* and blockchain* into struct methods
+* Refactor db..., action... and blockchain... funcs into struct methods
 * Implement the "URL" encoding for block transfers: so the data in the JSON messages isn't block data, but an URL to the block data.
 * Implement a Bloom filter for tables in SQL queries, to skip querying blocks which don't have the appropriate tables.
 * Implement stochastic guarded block importing: if there apparently is a new block in the network: ask a number of peers if they've seen it before importing it.
@@ -64,11 +64,24 @@ This is mostly alpha quality code.
 * Flood-based p2p network: every node can request a list of known connections from the other nodes.
 * Each message contains the genesis (root) block hash, so technically multiple chains can safely communicate on the same TCP port
 
+### Random thoughts and blue-Moon wishes
+
+* How to deal with blockchain abuse? I.e. one of the signatories turns out to be an adversary? Some ideas:
+
+  * Limit the amount of data (in bytes) a signatory can add by the signatorie's age (i.e. the longer the key is approved, the more data it can add). This offers absolutely no protection against "sleepers" which turn out to be adversaries after enough time has passed.
+  * Require multiple signatures on blocks, which offers no protection against a clique of adversaries, and inconveniences the common use case where there are indeed individul authoritative sources of data.
+  * Create a cryptocurrency overlay on the blockchain (possibly using external cryptocurrencies, tokens) where adding data becomes expensive - which doesn't protect against a well-funded adversary.
+
 ## How blocks are created
 
-Blocks are SQLite database files. Every party in posession of an *accepted private key* can create new blocks and sign them. Blocks are accepted (if other criteria are satisfied) only if they are signed by one of the accepted keys.
+Blocks are SQLite database files. Every party in posession of an *accepted private key* (i.e. a signatory) can create new blocks and sign them. Blocks are accepted (if other criteria are satisfied) only if they are signed by one of the accepted keys.
 
 New blocks can contain operations which add or remove keys from a (global) list of accepted keys, if they contain a sufficient number of signatures from a list of already accepted keys. See the `_keys` table description in the section on Block metadata.
+
+To be accepted as blocks, the SQLite database files have some soft and hard restrictions:
+
+* The databases MUST NOT be created with the "WAL" journal mode. They SHOULD be created with the "OFF" journal mode.
+* The databases SHOULD be created with the smallest possible page size, i.e. 512 bytes.
 
 ## Block metadata
 
