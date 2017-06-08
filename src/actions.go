@@ -11,7 +11,8 @@ import (
 	"time"
 )
 
-// The binary can be called with some actions, like signblock, importblock, signkey
+// The binary can be called with some actions, like signblock, importblock, signkey.
+// This function processes those and returns true if it has found something to execure.
 func processActions() bool {
 	if flag.NArg() == 0 {
 		return false
@@ -37,6 +38,8 @@ func processActions() bool {
 	return false
 }
 
+// Opens the given block file (SQLite database), creates metadata tables in it, signes the
+// block with one of the private keys, and accepts the resulting block into the blockchain.
 func actionSignImportBlock(fn string) {
 	db, err := dbOpen(fn, false)
 	if err != nil {
@@ -99,6 +102,7 @@ func actionSignImportBlock(fn string) {
 
 }
 
+// Runs a SQL query over all the blocks.
 func actionQuery(q string) {
 	log.Println("Running query:", q)
 	errCount := 0
@@ -143,6 +147,7 @@ func actionQuery(q string) {
 	}
 }
 
+// Shows the help message.
 func actionHelp() {
 	fmt.Printf("usage: %s [flags] [command]\n", os.Args[0])
 	flag.PrintDefaults()
@@ -153,6 +158,7 @@ func actionHelp() {
 	fmt.Println("\tsignimportblock\tSigns a block (creates metadata tables in it first) and imports it into the blockchain (expects 1 argument: a sqlite db filename)")
 }
 
+// Shows the public keys which correspond to private keys in the system database.
 func actionMyKeys() {
 	for _, k := range dbGetMyPublicKeys() {
 		fmt.Println(k)

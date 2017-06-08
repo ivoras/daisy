@@ -18,7 +18,10 @@ type sysEventMessage struct {
 	idata int
 }
 
+// Passes messages such as eventQuit
 var sysEventChannel = make(chan sysEventMessage, 5)
+
+// Process start time
 var startTime = time.Now()
 
 func main() {

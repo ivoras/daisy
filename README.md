@@ -12,7 +12,7 @@ When started, Daisy will initialise its databases and install the default (and c
 
 ## Querying the blockchain
 
-All the blocks in the blockchain can be queried by using a command such as `./daisy query "SELECT COUNT(*) FROM wikinews_titles"` (note the quotes!). This will iterate over all the blocks, and in those blocks where the query is successful, will output the results to stdout as JSON objects separated by newlines.
+All the blocks in the blockchain can be queried by using a command such as `./daisy query "SELECT COUNT(*) FROM wikinews_titles"` (note the quotes!). This will iterate over all the blocks, and in those blocks where the query is successful, will output the results to stdout as JSON objects separated by newlines. Of course, this is limited to read-only queries.
 
 ## Adding data to the blockchain
 
@@ -27,6 +27,7 @@ Some possible use cases I've thought of for blockchains where everyone can downl
 * Distributing academic articles: create a new blockchain for academic institutions (and Arxiv and such) and allow them to push blocks with articles into the blockchain.
 * Distributing municipal and governmental records: each institution / agency could be allowed to publish blocks with records and documents into the blockchain.
 * Distributing scientific data: only certified research institutions publish data into the blockchain.
+* Distributing sensor data, by having gateways publishing daily aggregate data from sensor networks.
 * Distributing sports / betting / lottery results
 * Wikileaks, of course
 * Making a gigantic world-wide database of e.g. product information: manufacturs could add information about their products, keyed on e.g. UPC codes
