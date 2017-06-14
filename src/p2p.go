@@ -146,10 +146,15 @@ func (p *p2pPeersSet) HasAddress(address string) bool {
 	return found
 }
 
-func (p *p2pPeersSet) GetAddresses() []string {
+func (p *p2pPeersSet) GetAddresses(onlyCanonical bool) []string {
 	var addresses []string
 	p.lock.With(func() {
 		for peer := range p.peers {
+			if onlyCanonical {
+				if !strings.HasSuffix(peer.address, fmt.Sprintf(":%d", DefaultP2PPort)) {
+					continue
+				}
+			}
 			addresses = append(addresses, peer.address)
 		}
 	})
@@ -225,7 +230,7 @@ func (p2pc *p2pConnection) handleConnection() {
 		},
 		Version:     p2pClientVersionString,
 		ChainHeight: dbGetBlockchainHeight(),
-		MyPeers:     p2pPeers.GetAddresses(),
+		MyPeers:     p2pPeers.GetAddresses(false),
 	}
 	err := p2pc.sendMsg(helloMsg)
 	if err != nil {
