@@ -31,6 +31,7 @@ Some possible use cases I've thought of for blockchains where everyone can downl
 * Distributing sports / betting / lottery results
 * Wikileaks, of course
 * Making a gigantic world-wide database of e.g. product information: manufacturers could add information about their products, keyed on e.g. UPC codes
+* Logging and auditing: create and ship signed, rich logs which can be easily distributed and audited.
 
 # Current status
 
