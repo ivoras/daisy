@@ -27,10 +27,11 @@ Some possible use cases I've thought of for blockchains where everyone can downl
 * Distributing academic articles: create a new blockchain for academic institutions (and Arxiv and such) and allow them to push blocks with articles into the blockchain.
 * Distributing municipal and governmental records: each institution / agency could be allowed to publish blocks with records and documents into the blockchain.
 * Distributing scientific data: only certified research institutions publish data into the blockchain.
-* Distributing sensor data, by having gateways publishing daily aggregate data from sensor networks.
+* Distributing sensor data, by having gateways publish daily aggregate data from sensor networks.
 * Distributing sports / betting / lottery results
 * Wikileaks, of course
 * Making a gigantic world-wide database of e.g. product information: manufacturs could add information about their products, keyed on e.g. UPC codes
+* As a basis for a cryptocurrency, by adding consensus logic for transactions
 
 # Current status
 
