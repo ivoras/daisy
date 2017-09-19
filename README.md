@@ -42,6 +42,11 @@ Basic crypto, block and db operations are implemented, the network part is mostl
 
 *WARNING:* This is mostly alpha quality code.
 
+Talks / presentations I gave about Daisy:
+
+* at a local Gophers meetup, September 2017: https://docs.google.com/presentation/d/1RybQluA3SbrM0PMgxmUSTWxyESTcXL9eFLSUvexDQSI/edit?usp=sharing
+* at FSEC, September 2017: https://docs.google.com/presentation/d/10lqfxQvRCOco4pxbVjZUyiClqyyCOdN1L3RhGYZbtdM/edit?usp=sharing
+
 ## ToDo
 
 * Implement nicer error handling when replying to messages
