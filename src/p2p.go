@@ -274,6 +274,11 @@ func (p2pc *p2pConnection) handleConnection() {
 	for {
 		select {
 		case msg := <-p2pc.chanFromPeer:
+			var _error string
+			if _error, err = msg.GetString("_error"); err == nil {
+				log.Printf("Fatal error from %v: %v", p2pc.conn, _error)
+				break
+			}
 			var cmd string
 			if cmd, err = msg.GetString("msg"); err != nil {
 				log.Printf("Error with msg from %v: %v", p2pc.conn, err)
