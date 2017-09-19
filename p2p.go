@@ -296,7 +296,11 @@ func (p2pc *p2pConnection) handleConnection() {
 				p2pc.handleBlock(msg)
 			}
 		case msg := <-p2pc.chanToPeer:
-			p2pc.sendMsg(msg)
+			err := p2pc.sendMsg(msg)
+			if err != nil {
+				log.Println(err)
+				break
+			}
 		}
 
 	}
