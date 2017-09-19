@@ -30,8 +30,11 @@ Some possible use cases I've thought of for blockchains where everyone can downl
 * Distributing sensor data, by having gateways publish daily aggregate data from sensor networks.
 * Distributing sports / betting / lottery results
 * Wikileaks, of course
-* Making a gigantic world-wide database of e.g. product information: manufacturs could add information about their products, keyed on e.g. UPC codes
 * As a basis for a cryptocurrency, by adding consensus logic for transactions
+* Making a gigantic world-wide database of e.g. product information: manufacturers could add information about their products, keyed on e.g. UPC codes
+* Logging and auditing: create and ship signed, rich logs which can be easily distributed and audited (e.g. each department publishes blocks of their changes).
+
+The blockchain is basically very well suited to data exchange between otherwise competitive or hostile parties - the "trustless" principle is how Bitcoin manages to work in a really hostile global environment. Daisy could help bridge such environments.
 
 # Current status
 

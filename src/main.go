@@ -18,14 +18,17 @@ type sysEventMessage struct {
 	idata int
 }
 
+// Passes messages such as eventQuit
 var sysEventChannel = make(chan sysEventMessage, 5)
+
+// Process start time
 var startTime = time.Now()
 
 func main() {
 	rand.Seed(p2pEphemeralID + getNowUTC()) // Initialise weak RNG with strong RNG
 	log.Println("Starting up", p2pClientVersionString, "...")
 	sigChannel := make(chan os.Signal, 1)
-	signal.Notify(sigChannel, syscall.SIGINT)
+	signal.Notify(sigChannel, syscall.SIGINT, syscall.SIGTERM)
 
 	configInit()
 	dbInit()

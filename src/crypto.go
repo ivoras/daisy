@@ -29,6 +29,7 @@ func cryptoInit() {
 	}
 }
 
+// Generates a keypair and writes it to the private database
 func generatePrivateKey(height int) *ecdsa.PrivateKey {
 	keys, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -94,11 +95,13 @@ func cryptoGetAPrivateKey() (*ecdsa.PrivateKey, string, error) {
 	return keys, publicKeyHash, nil
 }
 
+// Decodes the given bytes into a public key
 func cryptoDecodePublicKeyBytes(key []byte) (*ecdsa.PublicKey, error) {
 	ikey, err := x509.ParsePKIXPublicKey(key)
 	return ikey.(*ecdsa.PublicKey), err
 }
 
+// Returns a hash of the given public key
 func cryptoMustGetPublicKeyHash(key *ecdsa.PublicKey) string {
 	publicKeyBytes, err := x509.MarshalPKIXPublicKey(key)
 	if err != nil {
@@ -107,6 +110,7 @@ func cryptoMustGetPublicKeyHash(key *ecdsa.PublicKey) string {
 	return getPubKeyHash(publicKeyBytes)
 }
 
+// Signs the given public key hash with the given private key and returns the signature as a byte blob.
 func cryptoSignPublicKeyHash(myPrivateKey *ecdsa.PrivateKey, publicKeyHash string) ([]byte, error) {
 	if publicKeyHash[1] != ':' {
 		return nil, fmt.Errorf("cryptoSignPublicKeyHash() expects a public key in the \"type:hex\" format, not \"%s\"", publicKeyHash)
@@ -130,6 +134,7 @@ func cryptoVerifyPublicKeyHashSignature(publicKey *ecdsa.PublicKey, publicKeyHas
 	return cryptoVerifyBytes(publicKey, publicKeyHashBytes, signature)
 }
 
+// Signs a hex-encoded byte blob. and returns a hex-encoded signature byte blob
 func cryptoSignHex(myPrivateKey *ecdsa.PrivateKey, hash string) (string, error) {
 	hashBytes, err := hex.DecodeString(hash)
 	if err != nil {
@@ -142,6 +147,7 @@ func cryptoSignHex(myPrivateKey *ecdsa.PrivateKey, hash string) (string, error) 
 	return hex.EncodeToString(signatureBytes), nil
 }
 
+// Verifies the given signature of a hash, both hex-encoded. Returns nil if everything's ok.
 func cryptoVerifyHex(publicKey *ecdsa.PublicKey, hash string, signature string) error {
 	hashBytes, err := hex.DecodeString(hash)
 	if err != nil {
@@ -154,6 +160,7 @@ func cryptoVerifyHex(publicKey *ecdsa.PublicKey, hash string, signature string) 
 	return cryptoVerifyBytes(publicKey, hashBytes, signatureBytes)
 }
 
+// Verifies the given signature of a hash. Returns nil if everything's ok.
 func cryptoVerifyHexBytes(publicKey *ecdsa.PublicKey, hash string, signatureBytes []byte) error {
 	hashBytes, err := hex.DecodeString(hash)
 	if err != nil {
@@ -163,6 +170,7 @@ func cryptoVerifyHexBytes(publicKey *ecdsa.PublicKey, hash string, signatureByte
 
 }
 
+// Signes a byte blob with the given private key.
 func cryptoSignBytes(myPrivateKey *ecdsa.PrivateKey, hash []byte) ([]byte, error) {
 	var sig ecdsaSignature
 	var err error
@@ -180,6 +188,7 @@ func cryptoSignBytes(myPrivateKey *ecdsa.PrivateKey, hash []byte) ([]byte, error
 	return signature, nil
 }
 
+// Verifies a signed byte blob
 func cryptoVerifyBytes(publicKey *ecdsa.PublicKey, hash []byte, signature []byte) error {
 	var sig ecdsaSignature
 	_, err := asn1.Unmarshal(signature, &sig)
@@ -193,6 +202,7 @@ func cryptoVerifyBytes(publicKey *ecdsa.PublicKey, hash []byte, signature []byte
 	return fmt.Errorf("Signature verification failed")
 }
 
+// Returns a random positive 63-bit integer
 func randInt63() int64 {
 	buf := make([]byte, 8)
 	n, err := rand.Read(buf)

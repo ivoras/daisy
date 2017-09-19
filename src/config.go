@@ -26,6 +26,7 @@ var cfg struct {
 	showHelp   bool
 }
 
+// Initialises defaults, parses command line
 func configInit() {
 	u, err := user.Current()
 	if err != nil {
@@ -72,6 +73,7 @@ func configInit() {
 	}
 }
 
+// Loads the JSON config file.
 func loadConfigFile() {
 	data, err := ioutil.ReadFile(cfg.configFile)
 	if err != nil {

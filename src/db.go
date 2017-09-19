@@ -118,6 +118,7 @@ CREATE TABLE _keys (
 var mainDb *sql.DB
 var privateDb *sql.DB
 
+// Initialises the system databases
 func dbInit() {
 	dbFileName := fmt.Sprintf("%s/%s", cfg.DataDir, mainDbFileName)
 	_, err := os.Stat(dbFileName)
@@ -175,6 +176,7 @@ func dbInit() {
 	}
 }
 
+// Just opens the given file as a SQLite database
 func dbOpen(fileName string, readOnly bool) (*sql.DB, error) {
 	if !readOnly {
 		return sql.Open("sqlite3", fileName)
@@ -182,6 +184,7 @@ func dbOpen(fileName string, readOnly bool) (*sql.DB, error) {
 	return sql.Open("sqlite3", "file:"+fileName+"?mode=ro")
 }
 
+// Counts the number of private keys in the system databases
 func dbNumPrivateKeys() int {
 	assertSysDbOpen()
 	var count int
@@ -192,6 +195,7 @@ func dbNumPrivateKeys() int {
 	return count
 }
 
+// Checks to see if a table exists in the given database
 func dbTableExists(db *sql.DB, name string) bool {
 	var count int
 	err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&count)
@@ -201,12 +205,14 @@ func dbTableExists(db *sql.DB, name string) bool {
 	return count > 0
 }
 
+// Panics if the system databases are not open
 func assertSysDbOpen() {
 	if mainDb == nil || privateDb == nil {
 		log.Panic("Databases are not open")
 	}
 }
 
+// Checks if a public key is present in the system databases
 func dbPublicKeyExists(hash string) bool {
 	var count int
 	if err := mainDb.QueryRow("SELECT COUNT(*) FROM pubkeys WHERE pubkey_hash=?", hash).Scan(&count); err != nil {
@@ -215,6 +221,7 @@ func dbPublicKeyExists(hash string) bool {
 	return count > 0
 }
 
+// Writes a public key to the system databases
 func dbWritePublicKey(pubkey []byte, hash string, blockHeight int) {
 	_, err := mainDb.Exec("INSERT INTO pubkeys(pubkey_hash, pubkey, state, time_added, block_height) VALUES (?, ?, ?, ?, ?)",
 		hash, hex.EncodeToString(pubkey), "A", time.Now().Unix(), blockHeight)
@@ -223,6 +230,7 @@ func dbWritePublicKey(pubkey []byte, hash string, blockHeight int) {
 	}
 }
 
+// Marks a public key as revoked.
 func dbRevokePublicKey(hash string) {
 	_, err := mainDb.Exec("UPDATE pubkeys SET time_revoked=? WHERE pubkey_hash=?", getNowUTC(), hash)
 	if err != nil {
@@ -230,6 +238,7 @@ func dbRevokePublicKey(hash string) {
 	}
 }
 
+// Writes the given private key byte blob to the system databases
 func dbWritePrivateKey(privkey []byte, hash string) {
 	_, err := privateDb.Exec("INSERT INTO privkeys(pubkey_hash, privkey, time_added) VALUES (?, ?, ?)", hash, hex.EncodeToString(privkey), time.Now().Unix())
 	if err != nil {
@@ -237,6 +246,7 @@ func dbWritePrivateKey(privkey []byte, hash string) {
 	}
 }
 
+// Returns a list of public keys corresponding to private keys in the system databases
 func dbGetMyPublicKeys() []string {
 	var result []string
 	rows, err := privateDb.Query("SELECT pubkey_hash FROM privkeys")
@@ -254,6 +264,7 @@ func dbGetMyPublicKeys() []string {
 	return result
 }
 
+// Returns the current blockchain height
 func dbGetBlockchainHeight() int {
 	assertSysDbOpen()
 	var height int
@@ -264,6 +275,7 @@ func dbGetBlockchainHeight() int {
 	return height
 }
 
+// Returns a map of heights and hashes for the requested range of block heights
 func dbGetHeightHashes(minHeight, maxHeight int) map[int]string {
 	rows, err := mainDb.Query("SELECT height, hash FROM blockchain WHERE height BETWEEN ? AND ? ORDER BY height", minHeight, maxHeight)
 	if err != nil {
@@ -282,6 +294,7 @@ func dbGetHeightHashes(minHeight, maxHeight int) map[int]string {
 	return hh
 }
 
+// Returns a random private key from the system databases
 func dbGetAPrivateKey() ([]byte, string, error) {
 	var publicKeyHash string
 	var privateKey string
@@ -300,6 +313,7 @@ func dbGetAPrivateKey() ([]byte, string, error) {
 	return privateKeyBytes, publicKeyHash, nil
 }
 
+// Returns the public key corresponding to the given public key hash, by reading it from the system databases.
 func dbGetPublicKey(publicKeyHash string) (*DbPubKey, error) {
 	var dbpk DbPubKey
 	var publicKeyHexString string
@@ -342,6 +356,7 @@ func dbGetPublicKey(publicKeyHash string) (*DbPubKey, error) {
 	return &dbpk, nil
 }
 
+// Returns a block indexed by the given height.
 func dbGetBlockByHeight(height int) (*DbBlockchainBlock, error) {
 	var dbb DbBlockchainBlock
 	var hashSignatureHex string
@@ -370,6 +385,7 @@ func dbGetBlockByHeight(height int) (*DbBlockchainBlock, error) {
 	return &dbb, nil
 }
 
+// Returns a block of the given hash
 func dbGetBlock(hash string) (*DbBlockchainBlock, error) {
 	var dbb DbBlockchainBlock
 	var hashSignatureHex string
@@ -398,6 +414,7 @@ func dbGetBlock(hash string) (*DbBlockchainBlock, error) {
 	return &dbb, nil
 }
 
+// Tests if a block with the given hash exists in the db
 func dbBlockHashExists(hash string) bool {
 	var count int
 	err := mainDb.QueryRow("SELECT COUNT(*) FROM blockchain WHERE hash=?", hash).Scan(&count)
@@ -407,6 +424,7 @@ func dbBlockHashExists(hash string) bool {
 	return count > 0
 }
 
+// Tests if the block with the given height exists in the db
 func dbBlockHeightExists(h int) bool {
 	var count int
 	err := mainDb.QueryRow("SELECT COUNT(*) FROM blockchain WHERE height=?", h).Scan(&count)
@@ -424,6 +442,7 @@ func dbInsertBlock(dbb *DbBlockchainBlock) error {
 	return err
 }
 
+// Gets a list of saved p2p peer addresses
 func dbGetSavedPeers() peerStringMap {
 	result := peerStringMap{}
 	rows, err := mainDb.Query("SELECT address, time_added FROM peers")
@@ -443,6 +462,7 @@ func dbGetSavedPeers() peerStringMap {
 	return result
 }
 
+// Saves a p2p peer address to the db
 func dbSavePeer(address string) {
 	_, err := mainDb.Exec("INSERT OR REPLACE INTO peers(address, time_added) VALUES (?, ?)", address, getNowUTC())
 	if err != nil {

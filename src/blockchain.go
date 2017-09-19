@@ -29,6 +29,7 @@ const GenesisBlockHashSignature = "30460221008b8b3b3cfee2493ef58f2f6a1f1768b564f
 // GenesisBlockTimestamp is the timestamp of the genesis block
 const GenesisBlockTimestamp = "Sat, 06 May 2017 10:38:50 +0200"
 
+// Blocks (SQLite databases) are stored as flat files in a directory
 const blockchainSubdirectoryName = "blocks"
 const blockFilenameFormat = "%s/block_%08x.db"
 
@@ -63,6 +64,7 @@ type BlockKeyOp struct {
 	metadata         map[string]string
 }
 
+// Initializes the blockchain: creates database entries and the genesis block file
 func blockchainInit() {
 	blockchainSubdirectory = fmt.Sprintf("%s/%s", cfg.DataDir, blockchainSubdirectoryName)
 	if _, err := os.Stat(blockchainSubdirectory); err != nil {
@@ -161,6 +163,8 @@ func blockchainInit() {
 	}
 }
 
+// Verifies the entire blockchain to see if there are errors.
+// TODO: Dynamic adding and revoking of key is not yet checked
 func blockchainVerifyEverything() error {
 	maxHeight := dbGetBlockchainHeight()
 	var err error
@@ -273,6 +277,7 @@ func blockchainVerifyEverything() error {
 	return err
 }
 
+// Checks if a new block can be accepted to extend the blockchain
 func checkAcceptBlock(blk *Block) (int, error) {
 	// Step 1: Does the block fit, i.e. does it extend the chain?
 	if blk.Version != CurrentBlockVersion {
@@ -363,6 +368,7 @@ func QuorumForHeight(h int) int {
 	return int(math.Log(float64(h)) * 2)
 }
 
+// Formats the block height into a blockchain file (SQLite database) filename
 func blockchainGetFilename(h int) string {
 	return fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, h)
 }
@@ -417,6 +423,7 @@ func OpenBlockFile(fileName string) (*Block, error) {
 	return &b, nil
 }
 
+// Returns an integer value from the _meta table within the block
 func (b *Block) dbGetMetaInt(key string) (int, error) {
 	var value string
 	if err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value); err != nil {
@@ -425,6 +432,7 @@ func (b *Block) dbGetMetaInt(key string) (int, error) {
 	return strconv.Atoi(value)
 }
 
+// Returns a string value from the _meta table within the block
 func (b *Block) dbGetMetaString(key string) (string, error) {
 	var value string
 	if err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value); err != nil {
@@ -433,6 +441,7 @@ func (b *Block) dbGetMetaString(key string) (string, error) {
 	return value, nil
 }
 
+// Returns a byte blob value from the _meta table within the block (stored in the db as a hex string)
 func (b *Block) dbGetMetaHexBytes(key string) ([]byte, error) {
 	var value string
 	if err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value); err != nil {
@@ -441,6 +450,7 @@ func (b *Block) dbGetMetaHexBytes(key string) ([]byte, error) {
 	return hex.DecodeString(value)
 }
 
+// Returns a map of key operations stored in the block. Map keys are public key hashes, values are lists of ops.
 func (b *Block) dbGetKeyOps() (map[string][]BlockKeyOp, error) {
 	var count int
 	if err := b.db.QueryRow("SELECT COUNT(*) FROM _keys").Scan(&count); err != nil {
@@ -496,6 +506,7 @@ func (b *Block) dbGetKeyOps() (map[string][]BlockKeyOp, error) {
 	return keyOps, nil
 }
 
+// Ensures special metadata tables exist in a SQLite database
 func dbEnsureBlockchainTables(db *sql.DB) {
 	if !dbTableExists(db, "_meta") {
 		_, err := db.Exec(metaTableCreate)
@@ -511,11 +522,13 @@ func dbEnsureBlockchainTables(db *sql.DB) {
 	}
 }
 
+// Stores a key-value pair into the _meta table in the SQLite database
 func dbSetMeta(db *sql.DB, key string, value string) error {
 	_, err := db.Exec("INSERT OR REPLACE INTO _meta(key, value) VALUES ('"+key+"', ?)", value)
 	return err
 }
 
+// Copies a given file to the blockchain directory and names it as a block with the given height
 func blockchainCopyFile(fn string, height int) error {
 	blockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, height)
 	in, err := os.Open(fn)

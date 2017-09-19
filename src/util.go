@@ -25,14 +25,17 @@ func (m *WithMutex) With(f func()) {
 	m.Mutex.Unlock()
 }
 
+// Converts the given Unix timestamp to time.Time
 func unixTimeStampToUTCTime(ts int) time.Time {
 	return time.Unix(int64(ts), 0)
 }
 
+// Gets the current Unix timestamp in UTC
 func getNowUTC() int64 {
 	return time.Now().UTC().Unix()
 }
 
+// Mashals the given map of strings to JSON
 func stringMap2JsonBytes(m map[string]string) []byte {
 	b, err := json.Marshal(m)
 	if err != nil {
@@ -62,8 +65,10 @@ func hashFileToHexString(fileName string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+// StrIfMap is a convenient data type for dealing with maps of strings to interface{}
 type StrIfMap map[string]interface{}
 
+// GetString returns a string from this map.
 func (m StrIfMap) GetString(key string) (string, error) {
 	var ok bool
 	var ii interface{}
@@ -77,6 +82,7 @@ func (m StrIfMap) GetString(key string) (string, error) {
 	return val, nil
 }
 
+// GetString returns an Int64 from this map.
 func (m StrIfMap) GetInt64(key string) (int64, error) {
 	var ok bool
 	var ii interface{}
@@ -90,6 +96,7 @@ func (m StrIfMap) GetInt64(key string) (int64, error) {
 	return int64(val), nil
 }
 
+// GetString returns an int from this map.
 func (m StrIfMap) GetInt(key string) (int, error) {
 	var ok bool
 	var ii interface{}
@@ -103,6 +110,7 @@ func (m StrIfMap) GetInt(key string) (int, error) {
 	return int(val), nil
 }
 
+// GetString returns a map of integers to strings from this map.
 func (m StrIfMap) GetIntStringMap(key string) (map[int]string, error) {
 	var ok bool
 	var ii interface{}
@@ -128,6 +136,7 @@ func (m StrIfMap) GetIntStringMap(key string) (map[int]string, error) {
 	return val2, nil
 }
 
+// GetStringList returns a slice of strings from this map
 func (m StrIfMap) GetStringList(key string) ([]string, error) {
 	var ok bool
 	var ii interface{}
@@ -149,17 +158,20 @@ func (m StrIfMap) GetStringList(key string) ([]string, error) {
 	return result, nil
 }
 
+// StringSetWithExpiry is a set of strings whose entries disappear after a given time.
 type StringSetWithExpiry struct {
 	data map[string]time.Time
 	age  time.Duration
 	lock WithMutex
 }
 
+// NewStringSetWithExpiry returns a new StringSetWithExpiry, with the given expiry duration.
 func NewStringSetWithExpiry(d time.Duration) *StringSetWithExpiry {
 	ss := StringSetWithExpiry{data: make(map[string]time.Time), age: d}
 	return &ss
 }
 
+// Add adds the given string to the set
 func (ss *StringSetWithExpiry) Add(s string) {
 	ss.lock.With(func() {
 		ss.data[s] = time.Now()
@@ -167,6 +179,7 @@ func (ss *StringSetWithExpiry) Add(s string) {
 	ss.CheckExpire()
 }
 
+// CheckExpire walks the set and removes the entries which have expired.
 func (ss *StringSetWithExpiry) CheckExpire() int {
 	count := 0
 	ss.lock.With(func() {
@@ -185,6 +198,7 @@ func (ss *StringSetWithExpiry) CheckExpire() int {
 	return count
 }
 
+// Has tests if a string is present and not expired in this set.
 func (ss *StringSetWithExpiry) Has(s string) bool {
 	var ok bool
 	ss.lock.With(func() {
@@ -200,7 +214,7 @@ func (ss *StringSetWithExpiry) Has(s string) bool {
 	return ok
 }
 
-// TestAndSet atomically tests if the string s is in the set and adds it if it isn't.
+// TestAndSet atomically tests if the string s is present in the set and adds it if it isn't.
 // Returns true iff it was in the set.
 func (ss *StringSetWithExpiry) TestAndSet(s string) bool {
 	var ok bool
