@@ -88,12 +88,14 @@ var p2pEphemeralID = randInt63() & 0xffffffffffff
 
 // Everything useful describing one p2p connection
 type p2pConnection struct {
-	conn        net.Conn
-	address     string // host:port
-	peer        *bufio.ReadWriter
-	peerID      int64
-	chainHeight int
-	refreshTime time.Time
+	conn         net.Conn
+	address      string // host:port
+	peer         *bufio.ReadWriter
+	peerID       int64
+	chainHeight  int
+	refreshTime  time.Time
+	chanToPeer   chan interface{} // structs go out
+	chanFromPeer chan StrIfMap    // StrIfMaps go in
 }
 
 // A set of p2p connections
@@ -181,7 +183,7 @@ func p2pServer() {
 			log.Println("Ignoring bad peer", conn.RemoteAddr().String())
 			continue
 		}
-		p2pc := p2pConnection{conn: conn, address: conn.RemoteAddr().String()}
+		p2pc := p2pConnection{conn: conn, address: conn.RemoteAddr().String(), chanToPeer: make(chan interface{}, 5), chanFromPeer: make(chan StrIfMap, 5)}
 		p2pPeers.Add(&p2pc)
 		go p2pc.handleConnection()
 	}
@@ -238,45 +240,60 @@ func (p2pc *p2pConnection) handleConnection() {
 		return
 	}
 	log.Println("Handling connection", p2pc.conn)
+
+	go func() {
+		for {
+			line, err := p2pc.peer.ReadBytes('\n')
+			if err != nil {
+				log.Println("Error reading data from", p2pc.conn, err)
+				p2pc.chanFromPeer <- StrIfMap{"_error": "Error reading data"}
+				break
+			}
+			var msg StrIfMap
+			err = json.Unmarshal(line, &msg)
+			if err != nil {
+				log.Println("Cannot parse JSON", string(line), "from", p2pc.conn)
+				p2pc.chanFromPeer <- StrIfMap{"_error": "Cannot parse JSON"}
+				break
+			}
+
+			var root string
+			if root, err = msg.GetString("root"); err != nil {
+				log.Printf("Problem with chain root from  %v: %v", p2pc.conn, err)
+				p2pc.chanFromPeer <- StrIfMap{"_error": "Problem with chain root"}
+				break
+			}
+			if root != GenesisBlockHash {
+				log.Printf("Received message from %v for a different chain than mine (%s vs %s). Ignoring.", p2pc.conn, root, GenesisBlockHash)
+				continue
+			}
+			p2pc.chanFromPeer <- msg
+		}
+	}()
+
 	for {
-		line, err := p2pc.peer.ReadBytes('\n')
-		if err != nil {
-			log.Println("Error reading data from", p2pc.conn, err)
-			break
-		}
-		var msg StrIfMap
-		err = json.Unmarshal(line, &msg)
-		if err != nil {
-			log.Println("Cannot parse json", string(line), "from", p2pc.conn)
-			break
+		select {
+		case msg := <-p2pc.chanFromPeer:
+			var cmd string
+			if cmd, err = msg.GetString("msg"); err != nil {
+				log.Printf("Error with msg from %v: %v", p2pc.conn, err)
+			}
+			switch cmd {
+			case p2pMsgHello:
+				p2pc.handleMsgHello(msg)
+			case p2pMsgGetBlockHashes:
+				p2pc.handleGetBlockHashes(msg)
+			case p2pMsgBlockHashes:
+				p2pc.handleBlockHashes(msg)
+			case p2pMsgGetBlock:
+				p2pc.handleGetBlock(msg)
+			case p2pMsgBlock:
+				p2pc.handleBlock(msg)
+			}
+		case msg := <-p2pc.chanToPeer:
+			p2pc.sendMsg(msg)
 		}
 
-		var root string
-		if root, err = msg.GetString("root"); err != nil {
-			log.Printf("Problem with chain root from  %v: %v", p2pc.conn, err)
-			break
-		}
-		if root != GenesisBlockHash {
-			log.Printf("Received message from %v for a different chain than mine (%s vs %s). Ignoring.", p2pc.conn, root, GenesisBlockHash)
-			continue
-		}
-
-		var cmd string
-		if cmd, err = msg.GetString("msg"); err != nil {
-			log.Printf("Error with msg from %v: %v", p2pc.conn, err)
-		}
-		switch cmd {
-		case p2pMsgHello:
-			p2pc.handleMsgHello(msg)
-		case p2pMsgGetBlockHashes:
-			p2pc.handleGetBlockHashes(msg)
-		case p2pMsgBlockHashes:
-			p2pc.handleBlockHashes(msg)
-		case p2pMsgGetBlock:
-			p2pc.handleGetBlock(msg)
-		case p2pMsgBlock:
-			p2pc.handleBlock(msg)
-		}
 	}
 	// The connection has been dismissed
 }
@@ -350,7 +367,7 @@ func (p2pc *p2pConnection) handleGetBlockHashes(msg StrIfMap) {
 		},
 		Hashes: dbGetHeightHashes(minBlockHeight, maxBlockHeight),
 	}
-	p2pc.sendMsg(respMsg)
+	p2pc.chanToPeer <- respMsg
 }
 
 // Handle receiving blockhashes
@@ -385,7 +402,7 @@ func (p2pc *p2pConnection) handleBlockHashes(msg StrIfMap) {
 			},
 			Hash: hashes[h],
 		}
-		p2pc.sendMsg(msg)
+		p2pc.chanToPeer <- msg
 	}
 }
 
@@ -442,7 +459,7 @@ func (p2pc *p2pConnection) handleGetBlock(msg StrIfMap) {
 		Data:          b64block,
 		Size:          fileSize,
 	}
-	p2pc.sendMsg(respMsg)
+	p2pc.chanToPeer <- respMsg
 }
 
 // block: A block is received
@@ -607,7 +624,7 @@ func (co *p2pCoordinatorType) handleSearchForBlocks(p2pcStart *p2pConnection) {
 		MinBlockHeight: dbGetBlockchainHeight(),
 		MaxBlockHeight: p2pcStart.chainHeight,
 	}
-	p2pcStart.sendMsg(msg)
+	p2pcStart.chanToPeer <- msg
 }
 
 func (co *p2pCoordinatorType) handleDiscoverPeers(addresses []string) {
@@ -666,7 +683,7 @@ func (co *p2pCoordinatorType) floodPeersWithNewBlocks(minHeight, maxHeight int) 
 	}
 	p2pPeers.lock.With(func() {
 		for p2pc := range p2pPeers.peers {
-			p2pc.sendMsg(msg)
+			p2pc.chanToPeer <- msg
 		}
 	})
 }
