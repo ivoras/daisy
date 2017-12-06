@@ -1,4 +1,4 @@
-# Daisy - a private blockchain where blocks are SQLite databases
+# Daisy - a proof of authority blockchain where blocks are SQLite databases
 
 # What if...
 
