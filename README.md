@@ -1,5 +1,7 @@
 # Daisy - a proof of authority blockchain where blocks are SQLite databases
 
+Current status: alpha / nearly feature-complete
+
 # What if...
 
 What if there is a blockchain where only certain nodes, in possession of one of accepted private keys, can add data (i.e. new blocks) to a blockchain, whose blocks are (SQLite) databases, and where those existing nodes can accept new ones into their ranks by signing the candidate's keys in a web-of-trust style?
