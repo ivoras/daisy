@@ -239,7 +239,7 @@ func (p2pc *p2pConnection) handleConnection() {
 		log.Println(err)
 		return
 	}
-	log.Println("Handling connection", p2pc.conn)
+	log.Println("Handling connection", p2pc.address)
 
 	go func() {
 		for {
@@ -333,13 +333,13 @@ func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 	if remotePeers, err := msg.GetStringList("my_peers"); err == nil {
 		p2pCtrlChannel <- p2pCtrlMessage{msgType: p2pCtrlDiscoverPeers, payload: remotePeers}
 	}
-	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.conn, ver, p2pc.peerID, p2pc.chainHeight)
+	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.address, ver, p2pc.peerID, p2pc.chainHeight)
 	// Check for duplicates
 	dup := false
 	p2pPeers.lock.With(func() {
 		for p := range p2pPeers.peers {
 			if p.peerID == p2pc.peerID && p != p2pc {
-				log.Printf("%v looks like a duplicate of %v (%x), dropping it.", p2pc.conn, p.conn, p2pc.peerID)
+				log.Printf("%v looks like a duplicate of %v (%x), dropping it.", p2pc.address, p.address, p2pc.peerID)
 				dup = true
 				return
 			}
@@ -374,6 +374,7 @@ func (p2pc *p2pConnection) handleGetBlockHashes(msg StrIfMap) {
 		log.Println(p2pc.conn, err)
 		return
 	}
+	log.Printf("Sending block hashes from %d to %d to %s", minBlockHeight, maxBlockHeight, p2pc.address)
 	respMsg := p2pMsgBlockHashesStruct{
 		p2pMsgHeader: p2pMsgHeader{
 			P2pID: p2pEphemeralID,
@@ -639,6 +640,7 @@ func (co *p2pCoordinatorType) handleSearchForBlocks(p2pcStart *p2pConnection) {
 		MinBlockHeight: dbGetBlockchainHeight(),
 		MaxBlockHeight: p2pcStart.chainHeight,
 	}
+	log.Printf("Searching for blocks from %d to %d", msg.MinBlockHeight, msg.MaxBlockHeight)
 	p2pcStart.chanToPeer <- msg
 }
 
