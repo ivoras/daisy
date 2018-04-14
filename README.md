@@ -1,6 +1,8 @@
 # Daisy - a proof of authority blockchain where blocks are SQLite databases
 
-Current status: alpha / nearly feature-complete
+Current status: early alpha / nearly feature-complete.
+
+[Read Daisy's whitepaper here](https://docs.google.com/document/d/1YnFKQaXjTBPZ1e-x8tQ2oxddIoc0P-mfQ4hjUuuNzS4/edit?usp=sharing) to find out what it does and how to get started.
 
 # What if...
 
