@@ -273,7 +273,6 @@ func (p2pc *p2pConnection) handleConnection() {
 				continue
 			}
 			p2pc.chanFromPeer <- msg
-			log.Printf("... received message from %s: %s", p2pc.address, jsonifyWhatever(msg))
 		}
 	}()
 
@@ -558,6 +557,7 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 		return
 	}
 	blk.Height = height
+	blk.DbBlockchainBlock.TimeAccepted = time.Now()
 	err = blockchainCopyFile(blockFile.Name(), height)
 	if err != nil {
 		log.Println("Cannot copy block file:", err)
