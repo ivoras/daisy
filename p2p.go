@@ -183,7 +183,12 @@ func p2pServer() {
 			log.Println("Ignoring bad peer", conn.RemoteAddr().String())
 			continue
 		}
-		p2pc := p2pConnection{conn: conn, address: conn.RemoteAddr().String(), chanToPeer: make(chan interface{}, 5), chanFromPeer: make(chan StrIfMap, 5)}
+		p2pc := p2pConnection{
+			conn:         conn,
+			address:      conn.RemoteAddr().String(),
+			chanToPeer:   make(chan interface{}, 5),
+			chanFromPeer: make(chan StrIfMap, 5),
+		}
 		p2pPeers.Add(&p2pc)
 		go p2pc.handleConnection()
 	}
@@ -670,7 +675,12 @@ func (co *p2pCoordinatorType) handleDiscoverPeers(addresses []string) {
 		if err != nil {
 			return
 		}
-		p2pc := p2pConnection{conn: conn, address: canonicalAddress}
+		p2pc := p2pConnection{
+			conn:         conn,
+			address:      canonicalAddress,
+			chanToPeer:   make(chan interface{}, 5),
+			chanFromPeer: make(chan StrIfMap, 5),
+		}
 		p2pPeers.Add(&p2pc)
 		go p2pc.handleConnection()
 		log.Println("Detected canonical peer at", canonicalAddress)
@@ -723,7 +733,12 @@ func (co *p2pCoordinatorType) connectDbPeers() {
 			log.Println("Error connecting to", peer, err)
 			continue
 		}
-		p2pc := p2pConnection{conn: conn, address: peer}
+		p2pc := p2pConnection{
+			conn:         conn,
+			address:      peer,
+			chanToPeer:   make(chan interface{}, 5),
+			chanFromPeer: make(chan StrIfMap, 5),
+		}
 		p2pPeers.Add(&p2pc)
 		go p2pc.handleConnection()
 	}
