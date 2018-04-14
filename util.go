@@ -232,3 +232,12 @@ func (ss *StringSetWithExpiry) TestAndSet(s string) bool {
 	})
 	return ok
 }
+
+// Convert whatever to JSON
+func jsonifyWhatever(i interface{}) string {
+	jsonb, err := json.Marshal(i)
+	if err != nil {
+		log.Panic(err)
+	}
+	return string(jsonb)
+}

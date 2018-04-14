@@ -245,21 +245,21 @@ func (p2pc *p2pConnection) handleConnection() {
 		for {
 			line, err := p2pc.peer.ReadBytes('\n')
 			if err != nil {
-				log.Println("Error reading data from", p2pc.conn, err)
+				log.Println("Error reading data from", p2pc.address, err)
 				p2pc.chanFromPeer <- StrIfMap{"_error": "Error reading data"}
 				break
 			}
 			var msg StrIfMap
 			err = json.Unmarshal(line, &msg)
 			if err != nil {
-				log.Println("Cannot parse JSON", string(line), "from", p2pc.conn)
+				log.Println("Cannot parse JSON", strconv.QuoteToASCII(string(line)), "from", p2pc.address)
 				p2pc.chanFromPeer <- StrIfMap{"_error": "Cannot parse JSON"}
 				break
 			}
 
 			var root string
 			if root, err = msg.GetString("root"); err != nil {
-				log.Printf("Problem with chain root from  %v: %v", p2pc.conn, err)
+				log.Printf("Problem with chain root from  %v: %v", p2pc.address, err)
 				p2pc.chanFromPeer <- StrIfMap{"_error": "Problem with chain root"}
 				break
 			}
@@ -272,16 +272,19 @@ func (p2pc *p2pConnection) handleConnection() {
 	}()
 
 	for {
+		exit := false
+
 		select {
 		case msg := <-p2pc.chanFromPeer:
 			var _error string
 			if _error, err = msg.GetString("_error"); err == nil {
-				log.Printf("Fatal error from %v: %v", p2pc.conn, _error)
+				log.Printf("Fatal error from %v: %v", p2pc.address, _error)
+				exit = true
 				break
 			}
 			var cmd string
 			if cmd, err = msg.GetString("msg"); err != nil {
-				log.Printf("Error with msg from %v: %v", p2pc.conn, err)
+				log.Printf("Error with msg from %v: %v", p2pc.address, err)
 			}
 			switch cmd {
 			case p2pMsgHello:
@@ -299,10 +302,13 @@ func (p2pc *p2pConnection) handleConnection() {
 			err := p2pc.sendMsg(msg)
 			if err != nil {
 				log.Println(err)
+				exit = true
 				break
 			}
 		}
-
+		if exit {
+			break
+		}
 	}
 	// The connection has been dismissed
 }
