@@ -268,6 +268,7 @@ func (p2pc *p2pConnection) handleConnection() {
 				continue
 			}
 			p2pc.chanFromPeer <- msg
+			log.Printf("... received message from %s: %s", p2pc.address, jsonifyWhatever(msg))
 		}
 	}()
 
@@ -276,6 +277,7 @@ func (p2pc *p2pConnection) handleConnection() {
 
 		select {
 		case msg := <-p2pc.chanFromPeer:
+			log.Printf("... chainFromPeer: %s: %s", p2pc.address, jsonifyWhatever(msg))
 			var _error string
 			if _error, err = msg.GetString("_error"); err == nil {
 				log.Printf("Fatal error from %v: %v", p2pc.address, _error)
@@ -285,6 +287,8 @@ func (p2pc *p2pConnection) handleConnection() {
 			var cmd string
 			if cmd, err = msg.GetString("msg"); err != nil {
 				log.Printf("Error with msg from %v: %v", p2pc.address, err)
+				exit = true
+				break
 			}
 			switch cmd {
 			case p2pMsgHello:
