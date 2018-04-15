@@ -167,7 +167,6 @@ func blockchainInit() {
 // TODO: Dynamic adding and revoking of key is not yet checked
 func blockchainVerifyEverything() error {
 	maxHeight := dbGetBlockchainHeight()
-	var err error
 	for height := 0; height <= maxHeight; height++ {
 		if height > 0 && height%1000 == 0 {
 			log.Println("Verifying block", height)
@@ -175,106 +174,78 @@ func blockchainVerifyEverything() error {
 		blockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, height)
 		fileHash, err := hashFileToHexString(blockFilename)
 		if err != nil {
-			return fmt.Errorf("Error verifying block %d: %s", height, err)
+			return fmt.Errorf("block %d: %v", height, err)
 		}
 		dbb, err := dbGetBlockByHeight(height)
 		if err != nil {
-			return fmt.Errorf("Db error verifying block %d: %s", height, err)
+			return fmt.Errorf("block %d: %v", height, err)
 		}
 		if fileHash != dbb.Hash {
-			msg := fmt.Sprintf("Error verifying block %d: file hash %s doesn't match db hash %s", height, fileHash, dbb.Hash)
-			log.Println(msg)
-			err = fmt.Errorf(msg)
+			return fmt.Errorf("block %d: file hash %s doesn't match db hash %s", height, fileHash, dbb.Hash)
 		}
 		if height == 0 && fileHash != GenesisBlockHash {
-			msg := fmt.Sprintf("Error verifying block %d: it's supposed to be the genesis block but its hash doesn't match %s", height, GenesisBlockHash)
-			log.Println(msg)
-			err = fmt.Errorf(msg)
+			return fmt.Errorf("block %d: it's supposed to be the genesis block but its hash doesn't match %s",
+				height, GenesisBlockHash)
 		}
 		dbpk, err := dbGetPublicKey(dbb.SignaturePublicKeyHash)
 		if err != nil {
-			msg := fmt.Sprintf("Db error verifying block %d: error getting public key %s", height, dbb.SignaturePublicKeyHash)
-			log.Println(msg)
-			err = fmt.Errorf(msg)
+			return fmt.Errorf("block %d: error getting public key %s", height, dbb.SignaturePublicKeyHash)
 		}
 		creatorPublicKey, err := cryptoDecodePublicKeyBytes(dbpk.publicKeyBytes)
 		if err != nil {
-			msg := fmt.Sprintf("Error verifying block %d: cannot decode public key %s", height, dbb.SignaturePublicKeyHash)
-			log.Println(msg)
-			err = fmt.Errorf(msg)
+			return fmt.Errorf("block %d: cannot decode public key %s", height, dbb.SignaturePublicKeyHash)
 		}
 		hashBytes, err := hex.DecodeString(dbb.Hash)
 		if err != nil {
-			msg := fmt.Sprintf("Error verifying block %d: cannot decode hash %s", height, dbb.Hash)
-			log.Println(msg)
-			err = fmt.Errorf(msg)
+			return fmt.Errorf("block %d: cannot decode hash %s", height, dbb.Hash)
 		}
 		err = cryptoVerifyBytes(creatorPublicKey, hashBytes, dbb.HashSignature)
 		if err != nil {
-			msg := fmt.Sprintf("Error verifying block %d: block hash signature is invalid (%s)", height, err)
-			log.Println(msg)
-			err = fmt.Errorf(msg)
+			return fmt.Errorf("block %d: block hash signature is invalid (%v)", height, err)
 		}
 		previousHashBytes, err := hex.DecodeString(dbb.PreviousBlockHash)
 		if err != nil {
-			msg := fmt.Sprintf("Error verifying block %d: cannot decode previous block hash %s", height, dbb.PreviousBlockHash)
-			log.Println(msg)
-			err = fmt.Errorf(msg)
+			return fmt.Errorf("block %d: cannot decode previous block hash %s", height, dbb.PreviousBlockHash)
 		}
 		err = cryptoVerifyBytes(creatorPublicKey, previousHashBytes, dbb.PreviousBlockHashSignature)
 		if err != nil {
-			msg := fmt.Sprintf("Error verifying block %d: previous block hash signature is invalid (%s)", height, err)
-			log.Println(msg)
-			err = fmt.Errorf(msg)
+			return fmt.Errorf("block %d: previous block hash signature is invalid (%v)", height, err)
 		}
 		b, err := OpenBlockByHeight(height)
 		if err != nil {
-			msg := fmt.Sprintf("Error verifying block %d: cannot open block db file: %s", height, err)
-			log.Println(msg)
-			err = fmt.Errorf(msg)
-			continue
+			return fmt.Errorf("block %d: cannot open block db file: %v", height, err)
 		}
 		blockKeyOps, err := b.dbGetKeyOps()
 		if err != nil {
-			msg := fmt.Sprintf("Error verifying block %d: cannot get key ops: %s", height, err)
-			log.Println(msg)
-			err = fmt.Errorf(msg)
+			return fmt.Errorf("block %d: cannot get key ops: %v", height, err)
 		}
 		Q := QuorumForHeight(height)
 		for keyOpKeyHash, keyOps := range blockKeyOps {
 			if len(keyOps) != Q {
-				msg := fmt.Sprintf("Error verifying block %d: key ops for %s don't have quorum: %d vs Q=%d", height, keyOpKeyHash, len(keyOps), Q)
-				log.Println(msg)
-				err = fmt.Errorf(msg)
+				return fmt.Errorf("block %d: key ops for %s don't have quorum: %d vs Q=%d",
+					height, keyOpKeyHash, len(keyOps), Q)
 			}
 			op := keyOps[0].op
 			for _, kop := range keyOps {
 				if kop.op != op {
-					msg := fmt.Sprintf("Error verifying block %d: key ops for %s don't match: %s vs %s", height, keyOpKeyHash, kop.op, op)
-					log.Println(msg)
-					err = fmt.Errorf(msg)
+					return fmt.Errorf("block %d: key ops for %s don't match: %s vs %s",
+						height, keyOpKeyHash, kop.op, op)
 				}
 				dbSigningKey, err := dbGetPublicKey(kop.signatureKeyHash)
 				if err != nil {
-					msg := fmt.Sprintf("Error verifying block %d: cannot get public key %s from main db", height, kop.signatureKeyHash)
-					log.Println(msg)
-					err = fmt.Errorf(msg)
+					return fmt.Errorf("block %d: cannot get public key %s from main db", height, kop.signatureKeyHash)
 				}
 				signingKey, err := cryptoDecodePublicKeyBytes(dbSigningKey.publicKeyBytes)
 				if err != nil {
-					msg := fmt.Sprintf("Error verifying block %d: cannot decode public key %s", height, dbSigningKey.publicKeyHash)
-					log.Println(msg)
-					err = fmt.Errorf(msg)
+					return fmt.Errorf("block %d: cannot decode public key %s", height, dbSigningKey.publicKeyHash)
 				}
 				if err = cryptoVerifyPublicKeyHashSignature(signingKey, kop.publicKeyHash, kop.signature); err != nil {
-					msg := fmt.Sprintf("Error verifying block %d: key op signature invalid for signer %s: %s", height, kop.signatureKeyHash, err)
-					log.Println(msg)
-					err = fmt.Errorf(msg)
+					return fmt.Errorf("block %d: key op signature invalid for signer %s: %v", height, kop.signatureKeyHash, err)
 				}
 			}
 		}
 	}
-	return err
+	return nil
 }
 
 // Checks if a new block can be accepted to extend the blockchain
