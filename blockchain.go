@@ -126,7 +126,10 @@ func blockchainInit() {
 		*/
 
 		genesisBlockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, 0)
-		ioutil.WriteFile(genesisBlockFilename, genesisBlock, 0644)
+		err = ioutil.WriteFile(genesisBlockFilename, genesisBlock, 0644)
+		if err != nil {
+			log.Panic(err)
+		}
 		b, err := OpenBlockFile(genesisBlockFilename)
 		if err != nil {
 			log.Panicln(err)
@@ -433,7 +436,10 @@ func (b *Block) dbGetKeyOps() (map[string][]BlockKeyOp, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		err = rows.Close()
+		log.Printf("rows close: %v", err)
+	}()
 	for rows.Next() {
 		var publicKeyHex string
 		var signatureHex string
@@ -506,7 +512,10 @@ func blockchainCopyFile(fn string, height int) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() {
+		err = in.Close()
+		log.Printf("close: %v", err)
+	}()
 	out, err := os.Create(blockFilename)
 	if err != nil {
 		return err
