@@ -308,7 +308,6 @@ func (p2pc *p2pConnection) handleConnection() {
 			if err != nil {
 				log.Println(err)
 				exit = true
-				break
 			}
 		}
 		if exit {
