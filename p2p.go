@@ -343,7 +343,8 @@ func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 			return
 		}
 	}
-	if remotePeers, err := msg.GetStringList("my_peers"); err == nil {
+	var remotePeers []string
+	if remotePeers, err = msg.GetStringList("my_peers"); err == nil {
 		p2pCtrlChannel <- p2pCtrlMessage{msgType: p2pCtrlDiscoverPeers, payload: remotePeers}
 	}
 	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.address, ver, p2pc.peerID, p2pc.chainHeight)
