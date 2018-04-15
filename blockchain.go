@@ -70,7 +70,7 @@ func blockchainInit() {
 	if _, err := os.Stat(blockchainSubdirectory); err != nil {
 		// Probably doesn't exist, create it
 		log.Println("Creating directory", blockchainSubdirectory)
-		err := os.Mkdir(blockchainSubdirectory, 0755)
+		err := os.Mkdir(blockchainSubdirectory, 0700)
 		if err != nil {
 			log.Fatalln(err)
 		}
