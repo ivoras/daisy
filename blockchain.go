@@ -495,7 +495,7 @@ func dbEnsureBlockchainTables(db *sql.DB) {
 
 // Stores a key-value pair into the _meta table in the SQLite database
 func dbSetMeta(db *sql.DB, key string, value string) error {
-	_, err := db.Exec("INSERT OR REPLACE INTO _meta(key, value) VALUES ('?', ?)", key, value)
+	_, err := db.Exec("INSERT OR REPLACE INTO _meta(key, value) VALUES (?, ?)", key, value)
 	return err
 }
 
