@@ -177,9 +177,12 @@ func cryptoSignBytes(myPrivateKey *ecdsa.PrivateKey, hash []byte) ([]byte, error
 	var signature []byte
 	for {
 		sig.R, sig.S, err = ecdsa.Sign(rand.Reader, myPrivateKey, hash)
+		if err != nil {
+			return nil, fmt.Errorf("sign: %v", err)
+		}
 		signature, err = asn1.Marshal(sig)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("marshal: %v", err)
 		}
 		if sig.R.Cmp(bigIntZero) != 0 {
 			break
