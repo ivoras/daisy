@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -208,20 +209,16 @@ func (p2pc *p2pConnection) sendMsg(msg interface{}) error {
 		return err
 	}
 	if n != len(bmsg) {
-		return fmt.Errorf("Didn't write entire message: %v vs %v", n, len(bmsg))
+		return fmt.Errorf("didn't write entire message: %v vs %v", n, len(bmsg))
 	}
 	n, err = p2pc.peer.Write([]byte("\n"))
 	if err != nil {
 		return err
 	}
 	if n != 1 {
-		return fmt.Errorf("Didn't write newline")
+		return errors.New("didn't write newline")
 	}
-	err = p2pc.peer.Flush()
-	if err != nil {
-		return err
-	}
-	return nil
+	return p2pc.peer.Flush()
 }
 
 func (p2pc *p2pConnection) handleConnection() {
