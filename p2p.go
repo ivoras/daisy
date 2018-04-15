@@ -244,8 +244,9 @@ func (p2pc *p2pConnection) handleConnection() {
 	log.Println("Handling connection", p2pc.address)
 
 	go func() {
+		var line []byte
 		for {
-			line, err := p2pc.peer.ReadBytes('\n')
+			line, err = p2pc.peer.ReadBytes('\n')
 			if err != nil {
 				log.Println("Error reading data from", p2pc.address, err)
 				p2pc.chanFromPeer <- StrIfMap{"_error": "Error reading data"}

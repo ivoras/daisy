@@ -259,7 +259,7 @@ func checkAcceptBlock(blk *Block) (int, error) {
 		return 0, fmt.Errorf("Cannot find previous block %s: %v", blk.PreviousBlockHash, err)
 	}
 	thisBlockHeight := prevBlk.Height + 1
-	if _, err := dbGetBlockByHeight(thisBlockHeight); err == nil {
+	if _, err = dbGetBlockByHeight(thisBlockHeight); err == nil {
 		return 0, fmt.Errorf("The block to accept would replace an existing block, and this is not supported yet (height=%d)", prevBlk.Height+1)
 	}
 	// Step 2: Is the block signed by a valid signatory?
@@ -439,7 +439,7 @@ func (b *Block) dbGetKeyOps() (map[string][]BlockKeyOp, error) {
 		var signatureHex string
 		var metadataJSON string
 		var keyOp BlockKeyOp
-		if err := rows.Scan(&keyOp.op, &keyOp.publicKeyHash, &publicKeyHex, &keyOp.signatureKeyHash, &signatureHex, &metadataJSON); err != nil {
+		if err = rows.Scan(&keyOp.op, &keyOp.publicKeyHash, &publicKeyHex, &keyOp.signatureKeyHash, &signatureHex, &metadataJSON); err != nil {
 			return nil, err
 		}
 		if keyOp.publicKeyBytes, err = hex.DecodeString(publicKeyHex); err != nil {
