@@ -159,7 +159,7 @@ func blockchainInit() {
 	}
 	err := blockchainVerifyEverything()
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatalf("verify: %v", err)
 	}
 }
 
