@@ -172,7 +172,10 @@ func dbInit() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		os.Chmod(dbFileName, 0600)
+		err = os.Chmod(dbFileName, 0600)
+		if err != nil {
+			log.Fatalf("chmod: %v", err)
+		}
 	}
 }
 
@@ -281,7 +284,10 @@ func dbGetHeightHashes(minHeight, maxHeight int) map[int]string {
 	if err != nil {
 		log.Panic(err)
 	}
-	defer rows.Close()
+	defer func() {
+		err = rows.Close()
+		log.Fatalf("close: %v", err)
+	}()
 	hh := make(map[int]string)
 	for rows.Next() {
 		var height int
@@ -449,7 +455,12 @@ func dbGetSavedPeers() peerStringMap {
 	if err != nil {
 		log.Panic(err)
 	}
-	defer rows.Close()
+	defer func() {
+		err = rows.Close()
+		if err != nil {
+			log.Fatalf("close: %v", err)
+		}
+	}()
 	for rows.Next() {
 		var tmInt int
 		var address string

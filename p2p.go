@@ -171,7 +171,10 @@ func p2pServer() {
 		log.Println("Cannot listen on", serverAddress)
 		log.Fatal(err)
 	}
-	defer l.Close()
+	defer func() {
+		err = l.Close()
+		log.Fatalf("close: %v", err)
+	}()
 	log.Println("Listening on", serverAddress)
 	for {
 		conn, err := l.Accept()
@@ -222,8 +225,13 @@ func (p2pc *p2pConnection) sendMsg(msg interface{}) error {
 }
 
 func (p2pc *p2pConnection) handleConnection() {
-	defer p2pc.conn.Close()
-	defer p2pPeers.Remove(p2pc)
+	defer func() {
+		p2pPeers.Remove(p2pc)
+		err := p2pc.conn.Close()
+		if err != nil {
+			log.Printf("conn close: %v", err)
+		}
+	}()
 
 	p2pc.peer = bufio.NewReadWriter(bufio.NewReader(p2pc.conn), bufio.NewWriter(p2pc.conn))
 	helloMsg := p2pMsgHelloStruct{
@@ -356,7 +364,10 @@ func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 	}
 	if dup {
 		p2pCoordinator.badPeers.Add(p2pc.address)
-		p2pc.conn.Close()
+		err = p2pc.conn.Close()
+		if err != nil {
+			log.Printf("conn close: %v", err)
+		}
 		return
 	}
 	p2pc.checkSavePeer()
@@ -451,7 +462,10 @@ func (p2pc *p2pConnection) handleGetBlock(msg StrIfMap) {
 		log.Println(err)
 		return
 	}
-	defer f.Close()
+	defer func() {
+		err = f.Close()
+		log.Printf("close: %v", err)
+	}()
 	var zbuf bytes.Buffer
 	w := zlib.NewWriter(&zbuf)
 	written, err := io.Copy(w, f)
@@ -528,14 +542,27 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 		log.Println(err)
 		return
 	}
-	defer os.Remove(blockFile.Name())
-	defer blockFile.Close()
+	defer func() {
+		err = blockFile.Close()
+		if err != nil {
+			log.Printf("close: %v", err)
+		}
+		err = os.Remove(blockFile.Name())
+		if err != nil {
+			log.Printf("remove: %v", err)
+		}
+	}()
 	r, err := zlib.NewReader(bytes.NewReader(zlibData))
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	defer r.Close()
+	defer func() {
+		err = r.Close()
+		if err != nil {
+			log.Printf("close: %v", err)
+		}
+	}()
 	written, err := io.Copy(blockFile, r)
 	if err != nil {
 		log.Println(err)
@@ -594,7 +621,10 @@ func (p2pc *p2pConnection) checkSavePeer() {
 		return
 	}
 	log.Println("Detected canonical peer at", canonicalAddress)
-	conn.Close()
+	err = conn.Close()
+	if err != nil {
+		log.Printf("close: %v", err)
+	}
 	dbSavePeer(canonicalAddress)
 }
 
