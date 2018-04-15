@@ -456,7 +456,7 @@ func (b *Block) dbGetKeyOps() (map[string][]BlockKeyOp, error) {
 			return nil, err
 		}
 		if metadataJSON != "" {
-			if err = json.Unmarshal([]byte(metadataJSON), keyOp.metadata); err != nil {
+			if err = json.Unmarshal([]byte(metadataJSON), &keyOp.metadata); err != nil {
 				return nil, err
 			}
 		}
