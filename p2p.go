@@ -510,32 +510,39 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 	}
 	var blockFile *os.File
 	encoding, err := msg.GetString("encoding")
-	if encoding == "zlib-base64" {
-		zlibData, err := base64.StdEncoding.DecodeString(dataString)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		blockFile, err = ioutil.TempFile("", "daisy")
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		defer os.Remove(blockFile.Name())
-		r, err := zlib.NewReader(bytes.NewReader(zlibData))
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		written, err := io.Copy(blockFile, r)
-		r.Close()
-		blockFile.Close()
-		if written != fileSize {
-			log.Println("Error decoding block: sizes don't match:", written, "vs", fileSize)
-			return
-		}
-	} else {
+	if err != nil {
+		log.Printf("encoding: %v", err)
+		return
+	}
+	if encoding != "zlib-base64" {
 		log.Println("Unsupported encoding:", encoding)
+		return
+	}
+	zlibData, err := base64.StdEncoding.DecodeString(dataString)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	blockFile, err = ioutil.TempFile("", "daisy")
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer os.Remove(blockFile.Name())
+	defer blockFile.Close()
+	r, err := zlib.NewReader(bytes.NewReader(zlibData))
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer r.Close()
+	written, err := io.Copy(blockFile, r)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	if written != fileSize {
+		log.Println("Error decoding block: sizes don't match:", written, "vs", fileSize)
 		return
 	}
 	blk, err := OpenBlockFile(blockFile.Name())
