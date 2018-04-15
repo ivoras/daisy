@@ -58,21 +58,36 @@ func actionSignImportBlock(fn string) {
 	if err = dbSetMeta(db, "Version", strconv.Itoa(CurrentBlockVersion)); err != nil {
 		log.Panic(err)
 	}
-	dbSetMeta(db, "PreviousBlockHash", dbb.Hash)
+	err = dbSetMeta(db, "PreviousBlockHash", dbb.Hash)
+	if err != nil {
+		log.Fatal(err)
+	}
 	signature, err := cryptoSignHex(keypair, dbb.Hash)
 	if err != nil {
 		log.Fatal(err)
 	}
-	dbSetMeta(db, "PreviousBlockHashSignature", signature)
+	err = dbSetMeta(db, "PreviousBlockHashSignature", signature)
+	if err != nil {
+		log.Fatal(err)
+	}
 	pkdb, err := dbGetPublicKey(publicKeyHash)
 	if err != nil {
 		log.Panic(err)
 	}
-	previousBlockHashSignature, _ := hex.DecodeString(signature)
-	if creatorString, ok := pkdb.metadata["BlockCreator"]; ok {
-		dbSetMeta(db, "Creator", creatorString)
+	previousBlockHashSignature, err := hex.DecodeString(signature)
+	if err != nil {
+		log.Fatal(err)
 	}
-	dbSetMeta(db, "CreatorPublicKey", pkdb.publicKeyHash)
+	if creatorString, ok := pkdb.metadata["BlockCreator"]; ok {
+		err = dbSetMeta(db, "Creator", creatorString)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	err = dbSetMeta(db, "CreatorPublicKey", pkdb.publicKeyHash)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if err = db.Close(); err != nil {
 		log.Panic(err)
 	}
