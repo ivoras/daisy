@@ -82,7 +82,7 @@ func (m StrIfMap) GetString(key string) (string, error) {
 	return val, nil
 }
 
-// GetString returns an Int64 from this map.
+// GetInt64 returns an Int64 from this map.
 func (m StrIfMap) GetInt64(key string) (int64, error) {
 	var ok bool
 	var ii interface{}
@@ -96,7 +96,7 @@ func (m StrIfMap) GetInt64(key string) (int64, error) {
 	return int64(val), nil
 }
 
-// GetString returns an int from this map.
+// GetInt returns an int from this map.
 func (m StrIfMap) GetInt(key string) (int, error) {
 	var ok bool
 	var ii interface{}
@@ -110,7 +110,7 @@ func (m StrIfMap) GetInt(key string) (int, error) {
 	return int(val), nil
 }
 
-// GetString returns a map of integers to strings from this map.
+// GetIntStringMap returns a map of integers to strings from this map.
 func (m StrIfMap) GetIntStringMap(key string) (map[int]string, error) {
 	var ok bool
 	var ii interface{}
