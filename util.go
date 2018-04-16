@@ -59,7 +59,7 @@ func hashFileToHexString(fileName string) (string, error) {
 	defer func() {
 		err = file.Close()
 		if err != nil {
-			log.Printf("close: %v", err)
+			log.Printf("hashFileToHexString file.Close: %v", err)
 		}
 	}()
 	hash := sha256.New()

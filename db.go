@@ -286,7 +286,9 @@ func dbGetHeightHashes(minHeight, maxHeight int) map[int]string {
 	}
 	defer func() {
 		err = rows.Close()
-		log.Fatalf("close: %v", err)
+		if err != nil {
+			log.Fatalf("dbGetHeightHashes rows.Close: %v", err)
+		}
 	}()
 	hh := make(map[int]string)
 	for rows.Next() {
@@ -458,7 +460,7 @@ func dbGetSavedPeers() peerStringMap {
 	defer func() {
 		err = rows.Close()
 		if err != nil {
-			log.Fatalf("close: %v", err)
+			log.Fatalf("dbGetSavedPeers rows.Close: %v", err)
 		}
 	}()
 	for rows.Next() {

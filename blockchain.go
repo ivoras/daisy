@@ -511,7 +511,9 @@ func blockchainCopyFile(fn string, height int) error {
 	}
 	defer func() {
 		err = in.Close()
-		log.Printf("close: %v", err)
+		if err != nil {
+			log.Printf("blockchainCopyFile in.Close: %v", err)
+		}
 	}()
 	out, err := os.Create(blockFilename)
 	if err != nil {
