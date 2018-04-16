@@ -173,7 +173,9 @@ func p2pServer() {
 	}
 	defer func() {
 		err = l.Close()
-		log.Fatalf("close: %v", err)
+		if err != nil {
+			log.Fatalf("p2pServer l.Close: %v", err)
+		}
 	}()
 	log.Println("Listening on", serverAddress)
 	for {
@@ -230,7 +232,7 @@ func (p2pc *p2pConnection) handleConnection() {
 		p2pPeers.Remove(p2pc)
 		err := p2pc.conn.Close()
 		if err != nil {
-			log.Printf("conn close: %v", err)
+			log.Printf("p2pc.conn.Close: %v", err)
 		}
 	}()
 
@@ -369,7 +371,7 @@ func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 		p2pCoordinator.badPeers.Add(p2pc.address)
 		err = p2pc.conn.Close()
 		if err != nil {
-			log.Printf("conn close: %v", err)
+			log.Printf("p2pc.conn.Close: %v", err)
 		}
 		return
 	}
@@ -467,7 +469,7 @@ func (p2pc *p2pConnection) handleGetBlock(msg StrIfMap) {
 	}
 	defer func() {
 		err = f.Close()
-		log.Printf("close: %v", err)
+		log.Printf("handleGetBlock f.Close: %v", err)
 	}()
 	var zbuf bytes.Buffer
 	w := zlib.NewWriter(&zbuf)
@@ -548,7 +550,7 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 	defer func() {
 		err = blockFile.Close()
 		if err != nil {
-			log.Printf("close: %v", err)
+			log.Printf("handleBlock blockFile.Close: %v", err)
 		}
 		err = os.Remove(blockFile.Name())
 		if err != nil {
@@ -563,7 +565,7 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 	defer func() {
 		err = r.Close()
 		if err != nil {
-			log.Printf("close: %v", err)
+			log.Printf("handleBlock r.Close: %v", err)
 		}
 	}()
 	written, err := io.Copy(blockFile, r)
@@ -626,7 +628,7 @@ func (p2pc *p2pConnection) checkSavePeer() {
 	log.Println("Detected canonical peer at", canonicalAddress)
 	err = conn.Close()
 	if err != nil {
-		log.Printf("close: %v", err)
+		log.Printf("checkSavePeer conn.Close: %v", err)
 	}
 	dbSavePeer(canonicalAddress)
 }
