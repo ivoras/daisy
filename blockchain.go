@@ -436,10 +436,7 @@ func (b *Block) dbGetKeyOps() (map[string][]BlockKeyOp, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		err = rows.Close()
-		log.Printf("rows close: %v", err)
-	}()
+	defer rows.Close()
 	for rows.Next() {
 		var publicKeyHex string
 		var signatureHex string
