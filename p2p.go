@@ -221,6 +221,7 @@ func (p2pc *p2pConnection) sendMsg(msg interface{}) error {
 	if err != nil {
 		return err
 	}
+	log.Println("--> successfully wrote", string(bmsg))
 	return nil
 }
 
@@ -309,7 +310,7 @@ func (p2pc *p2pConnection) handleConnection() {
 		case msg := <-p2pc.chanToPeer:
 			err := p2pc.sendMsg(msg)
 			if err != nil {
-				log.Println(err)
+				log.Println("Error sending to peer:", err)
 				exit = true
 				break
 			}
@@ -319,6 +320,7 @@ func (p2pc *p2pConnection) handleConnection() {
 		}
 	}
 	// The connection has been dismissed
+	log.Println("Closing connection", p2pc.address)
 }
 
 func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
