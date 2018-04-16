@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -170,7 +171,10 @@ func p2pServer() {
 		log.Println("Cannot listen on", serverAddress)
 		log.Fatal(err)
 	}
-	defer l.Close()
+	defer func() {
+		err = l.Close()
+		log.Fatalf("close: %v", err)
+	}()
 	log.Println("Listening on", serverAddress)
 	for {
 		conn, err := l.Accept()
@@ -208,26 +212,27 @@ func (p2pc *p2pConnection) sendMsg(msg interface{}) error {
 		return err
 	}
 	if n != len(bmsg) {
-		return fmt.Errorf("Didn't write entire message: %v vs %v", n, len(bmsg))
+		return fmt.Errorf("didn't write entire message: %v vs %v", n, len(bmsg))
 	}
 	n, err = p2pc.peer.Write([]byte("\n"))
 	if err != nil {
 		return err
 	}
 	if n != 1 {
-		return fmt.Errorf("Didn't write newline")
-	}
-	err = p2pc.peer.Flush()
-	if err != nil {
-		return err
+		return errors.New("didn't write newline")
 	}
 	log.Println("--> successfully wrote", string(bmsg))
-	return nil
+	return p2pc.peer.Flush()
 }
 
 func (p2pc *p2pConnection) handleConnection() {
-	defer p2pc.conn.Close()
-	defer p2pPeers.Remove(p2pc)
+	defer func() {
+		p2pPeers.Remove(p2pc)
+		err := p2pc.conn.Close()
+		if err != nil {
+			log.Printf("conn close: %v", err)
+		}
+	}()
 
 	p2pc.peer = bufio.NewReadWriter(bufio.NewReader(p2pc.conn), bufio.NewWriter(p2pc.conn))
 	helloMsg := p2pMsgHelloStruct{
@@ -248,8 +253,9 @@ func (p2pc *p2pConnection) handleConnection() {
 	log.Println("Handling connection", p2pc.address)
 
 	go func() {
+		var line []byte
 		for {
-			line, err := p2pc.peer.ReadBytes('\n')
+			line, err = p2pc.peer.ReadBytes('\n')
 			if err != nil {
 				log.Println("Error reading data from", p2pc.address, err)
 				p2pc.chanFromPeer <- StrIfMap{"_error": "Error reading data"}
@@ -312,7 +318,6 @@ func (p2pc *p2pConnection) handleConnection() {
 			if err != nil {
 				log.Println("Error sending to peer:", err)
 				exit = true
-				break
 			}
 		}
 		if exit {
@@ -340,7 +345,8 @@ func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 			return
 		}
 	}
-	if remotePeers, err := msg.GetStringList("my_peers"); err == nil {
+	var remotePeers []string
+	if remotePeers, err = msg.GetStringList("my_peers"); err == nil {
 		p2pCtrlChannel <- p2pCtrlMessage{msgType: p2pCtrlDiscoverPeers, payload: remotePeers}
 	}
 	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.address, ver, p2pc.peerID, p2pc.chainHeight)
@@ -361,7 +367,10 @@ func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 	}
 	if dup {
 		p2pCoordinator.badPeers.Add(p2pc.address)
-		p2pc.conn.Close()
+		err = p2pc.conn.Close()
+		if err != nil {
+			log.Printf("conn close: %v", err)
+		}
 		return
 	}
 	p2pc.checkSavePeer()
@@ -456,7 +465,10 @@ func (p2pc *p2pConnection) handleGetBlock(msg StrIfMap) {
 		log.Println(err)
 		return
 	}
-	defer f.Close()
+	defer func() {
+		err = f.Close()
+		log.Printf("close: %v", err)
+	}()
 	var zbuf bytes.Buffer
 	w := zlib.NewWriter(&zbuf)
 	written, err := io.Copy(w, f)
@@ -515,32 +527,52 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 	}
 	var blockFile *os.File
 	encoding, err := msg.GetString("encoding")
-	if encoding == "zlib-base64" {
-		zlibData, err := base64.StdEncoding.DecodeString(dataString)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		blockFile, err = ioutil.TempFile("", "daisy")
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		defer os.Remove(blockFile.Name())
-		r, err := zlib.NewReader(bytes.NewReader(zlibData))
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		written, err := io.Copy(blockFile, r)
-		r.Close()
-		blockFile.Close()
-		if written != fileSize {
-			log.Println("Error decoding block: sizes don't match:", written, "vs", fileSize)
-			return
-		}
-	} else {
+	if err != nil {
+		log.Printf("encoding: %v", err)
+		return
+	}
+	if encoding != "zlib-base64" {
 		log.Println("Unsupported encoding:", encoding)
+		return
+	}
+	zlibData, err := base64.StdEncoding.DecodeString(dataString)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	blockFile, err = ioutil.TempFile("", "daisy")
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer func() {
+		err = blockFile.Close()
+		if err != nil {
+			log.Printf("close: %v", err)
+		}
+		err = os.Remove(blockFile.Name())
+		if err != nil {
+			log.Printf("remove: %v", err)
+		}
+	}()
+	r, err := zlib.NewReader(bytes.NewReader(zlibData))
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer func() {
+		err = r.Close()
+		if err != nil {
+			log.Printf("close: %v", err)
+		}
+	}()
+	written, err := io.Copy(blockFile, r)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	if written != fileSize {
+		log.Println("Error decoding block: sizes don't match:", written, "vs", fileSize)
 		return
 	}
 	blk, err := OpenBlockFile(blockFile.Name())
@@ -592,7 +624,10 @@ func (p2pc *p2pConnection) checkSavePeer() {
 		return
 	}
 	log.Println("Detected canonical peer at", canonicalAddress)
-	conn.Close()
+	err = conn.Close()
+	if err != nil {
+		log.Printf("close: %v", err)
+	}
 	dbSavePeer(canonicalAddress)
 }
 
