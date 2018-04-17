@@ -157,10 +157,15 @@ func (p *p2pPeersSet) tryPeersConnectable() {
 			if peer.testedConnectable || peer.isConnectable {
 				continue
 			}
-			host, _, err := splitAddress(peer.address)
+			host, port, err := splitAddress(peer.address)
 			if err != nil {
 				continue
 			}
+			if port == DefaultP2PPort {
+				// we're already connected to it
+				continue
+			}
+
 			address := fmt.Sprintf("%s:%d", host, DefaultP2PPort)
 			peer.testedConnectable = true
 
