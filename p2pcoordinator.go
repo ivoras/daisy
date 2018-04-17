@@ -29,7 +29,8 @@ var p2pCoordinator = p2pCoordinatorType{
 
 func (co *p2pCoordinatorType) Run() {
 	co.lastTickBlockchainHeight = dbGetBlockchainHeight()
-	go co.timeTickSource()
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case msg := <-p2pCtrlChannel:
@@ -39,16 +40,9 @@ func (co *p2pCoordinatorType) Run() {
 			case p2pCtrlDiscoverPeers:
 				co.handleDiscoverPeers(msg.payload.([]string))
 			}
-		case <-co.timeTicks:
+		case <-ticker.C:
 			co.handleTimeTick()
 		}
-	}
-}
-
-func (co *p2pCoordinatorType) timeTickSource() {
-	for {
-		time.Sleep(1 * time.Second)
-		co.timeTicks <- 1
 	}
 }
 
