@@ -364,6 +364,18 @@ func dbGetPublicKey(publicKeyHash string) (*DbPubKey, error) {
 	return &dbpk, nil
 }
 
+// Returns a block hash by its height
+func dbGetBlockHashByHeight(height int) string {
+	var hash string
+	err := mainDb.QueryRow("SELECT hash FROM blockchain WHERE height=?", height).Scan(&hash)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			log.Panicln(err)
+		}
+	}
+	return hash
+}
+
 // Returns a block indexed by the given height.
 func dbGetBlockByHeight(height int) (*DbBlockchainBlock, error) {
 	var dbb DbBlockchainBlock

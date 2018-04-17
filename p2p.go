@@ -500,6 +500,10 @@ func (p2pc *p2pConnection) handleBlockHashes(msg StrIfMap) {
 	for _, h := range heights {
 		if dbBlockHeightExists(h) {
 			log.Println("handleBlockHashes: already have block:", h)
+			if dbGetBlockHashByHeight(h) != hashes[h] {
+				log.Println("ERROR: Blockchain desynced: received block hash at height", h, "to be", hashes[h], "instead of", dbGetBlockHashByHeight(h))
+				return
+			}
 			continue
 		}
 		if p2pCoordinator.recentlyRequestedBlocks.TestAndSet(hashes[h]) {
