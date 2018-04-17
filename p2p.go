@@ -103,7 +103,7 @@ type p2pConnection struct {
 // A set of p2p connections
 type p2pPeersSet struct {
 	peers map[*p2pConnection]time.Time
-	lock  WithMutex
+	lock  WithMutex // Warning: do not do any IO/network operations while holding this lock
 }
 
 // The global set of p2p connections. XXX: Singletons in Go?
@@ -150,6 +150,8 @@ func (p *p2pPeersSet) GetAddresses(onlyConnectable bool) []string {
 }
 
 func (p *p2pPeersSet) tryPeersConnectable() {
+	addressesToTry := map[string]string{}
+
 	p.lock.With(func() {
 		for peer := range p.peers {
 			if peer.testedConnectable || peer.isConnectable {
@@ -161,20 +163,32 @@ func (p *p2pPeersSet) tryPeersConnectable() {
 			}
 			address := fmt.Sprintf("%s:%d", host, DefaultP2PPort)
 			peer.testedConnectable = true
-			conn, err := net.Dial("tcp", address)
-			if err != nil {
-				continue
-			}
-			peer.isConnectable = true
-			err = conn.Close()
-			if err != nil {
-				log.Println(err)
-			}
+
+			addressesToTry[peer.address] = address
 		}
 	})
+
+	for paddress, address := range addressesToTry {
+		conn, err := net.Dial("tcp", address)
+		if err != nil {
+			continue
+		}
+		p.lock.With(func() {
+			for peer := range p.peers {
+				if peer.address == paddress {
+					peer.isConnectable = true
+				}
+			}
+		})
+
+		err = conn.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}
 }
 
-func (p *p2pPeersSet) saveConnetablePeers() {
+func (p *p2pPeersSet) saveConnectablePeers() {
 	dbPeers := dbGetSavedPeers()
 	localAddresses := getLocalAddresses()
 
@@ -200,16 +214,7 @@ func (p *p2pPeersSet) saveConnetablePeers() {
 				// Local interface
 				continue
 			}
-			// Detect if there's a canonical peer on the other side, somewhat brute-forceish
-			conn, err := net.DialTCP("tcp", nil, addr)
-			if err != nil {
-				continue
-			}
 			log.Println("Detected canonical peer at", canonicalAddress)
-			err = conn.Close()
-			if err != nil {
-				log.Printf("checkSavePeer conn.Close: %v", err)
-			}
 			dbSavePeer(canonicalAddress)
 		}
 	})

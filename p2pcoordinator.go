@@ -121,7 +121,7 @@ func (co *p2pCoordinatorType) handleTimeTick() {
 	}
 	if time.Since(co.lastReconnectTime) >= 10*time.Minute {
 		co.lastReconnectTime = time.Now()
-		p2pPeers.saveConnetablePeers()
+		p2pPeers.saveConnectablePeers()
 		co.connectDbPeers()
 	}
 	p2pPeers.tryPeersConnectable()
