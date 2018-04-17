@@ -273,7 +273,7 @@ func (p2pc *p2pConnection) sendMsg(msg interface{}) error {
 	if n != 1 {
 		return errors.New("didn't write newline")
 	}
-	log.Println("--> successfully wrote", string(bmsg))
+	//log.Println("... successfully wrote", string(bmsg))
 	return p2pc.peer.Flush()
 }
 
@@ -343,7 +343,7 @@ func (p2pc *p2pConnection) handleConnection() {
 
 		select {
 		case msg := <-p2pc.chanFromPeer:
-			log.Printf("... chainFromPeer: %s: %s", p2pc.address, jsonifyWhatever(msg))
+			// log.Printf("... chainFromPeer: %s: %s", p2pc.address, jsonifyWhatever(msg))
 			var _error string
 			if _error, err = msg.GetString("_error"); err == nil {
 				log.Printf("Fatal error from %v: %v", p2pc.address, _error)
