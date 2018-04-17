@@ -84,19 +84,21 @@ var bootstrapPeers = peerStringMap{
 	"fielder.ivoras.net:2017": time.Now(),
 }
 
-// The temporary ID of this node, strong RNG
+// The temporary ID of this node, using strong RNG
 var p2pEphemeralID = randInt63() & 0xffffffffffff
 
 // Everything useful describing one p2p connection
 type p2pConnection struct {
-	conn         net.Conn
-	address      string // host:port
-	peer         *bufio.ReadWriter
-	peerID       int64
-	chainHeight  int
-	refreshTime  time.Time
-	chanToPeer   chan interface{} // structs go out
-	chanFromPeer chan StrIfMap    // StrIfMaps go in
+	conn              net.Conn
+	address           string // host:port
+	peer              *bufio.ReadWriter
+	peerID            int64
+	isConnectable     bool // using the default port
+	testedConnectable bool // using the default port
+	chainHeight       int
+	refreshTime       time.Time
+	chanToPeer        chan interface{} // structs go out
+	chanFromPeer      chan StrIfMap    // StrIfMaps go in
 }
 
 // A set of p2p connections
@@ -105,22 +107,8 @@ type p2pPeersSet struct {
 	lock  WithMutex
 }
 
-// The global set of p2p connections
+// The global set of p2p connections. XXX: Singletons in Go?
 var p2pPeers = p2pPeersSet{peers: make(map[*p2pConnection]time.Time)}
-
-// Messages to the p2p controller goroutine
-const (
-	p2pCtrlSearchForBlocks = iota
-	p2pCtrlHaveNewBlock
-	p2pCtrlDiscoverPeers
-)
-
-type p2pCtrlMessage struct {
-	msgType int
-	payload interface{}
-}
-
-var p2pCtrlChannel = make(chan p2pCtrlMessage, 8)
 
 // Adds a p2p connections to the set of p2p connections
 func (p *p2pPeersSet) Add(c *p2pConnection) {
@@ -149,19 +137,42 @@ func (p *p2pPeersSet) HasAddress(address string) bool {
 	return found
 }
 
-func (p *p2pPeersSet) GetAddresses(onlyCanonical bool) []string {
+func (p *p2pPeersSet) GetAddresses(onlyConnectable bool) []string {
 	var addresses []string
 	p.lock.With(func() {
 		for peer := range p.peers {
-			if onlyCanonical {
-				if !strings.HasSuffix(peer.address, fmt.Sprintf(":%d", DefaultP2PPort)) {
-					continue
-				}
+			if onlyConnectable && !peer.isConnectable {
+				continue
 			}
 			addresses = append(addresses, peer.address)
 		}
 	})
 	return addresses
+}
+
+func (p *p2pPeersSet) tryPeersConnectable() {
+	p.lock.With(func() {
+		for peer := range p.peers {
+			if peer.testedConnectable || peer.isConnectable {
+				continue
+			}
+			host, _, err := splitAddress(peer.address)
+			if err != nil {
+				continue
+			}
+			address := fmt.Sprintf("%s:%d", host, DefaultP2PPort)
+			peer.testedConnectable = true
+			conn, err := net.Dial("tcp", address)
+			if err != nil {
+				continue
+			}
+			peer.isConnectable = true
+			err = conn.Close()
+			if err != nil {
+				log.Println(err)
+			}
+		}
+	})
 }
 
 func p2pServer() {
@@ -352,7 +363,7 @@ func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 	}
 	var remotePeers []string
 	if remotePeers, err = msg.GetStringList("my_peers"); err == nil {
-		p2pCtrlChannel <- p2pCtrlMessage{msgType: p2pCtrlDiscoverPeers, payload: remotePeers}
+		p2pCtrlChannel <- p2pCtrlMessage{msgType: p2pCtrlConnectPeers, payload: remotePeers}
 	}
 	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.address, ver, p2pc.peerID, p2pc.chainHeight)
 	// Check for duplicates

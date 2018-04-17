@@ -4,9 +4,22 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"strings"
 	"time"
 )
+
+// Messages to the p2p controller goroutine
+const (
+	p2pCtrlSearchForBlocks = iota
+	p2pCtrlHaveNewBlock
+	p2pCtrlConnectPeers
+)
+
+type p2pCtrlMessage struct {
+	msgType int
+	payload interface{}
+}
+
+var p2pCtrlChannel = make(chan p2pCtrlMessage, 8)
 
 // Data related to the (single instance of) the global p2p coordinator. This is also a
 // single-threaded object, its fields and methods are only expected to be accessed from
@@ -37,8 +50,8 @@ func (co *p2pCoordinatorType) Run() {
 			switch msg.msgType {
 			case p2pCtrlSearchForBlocks:
 				co.handleSearchForBlocks(msg.payload.(*p2pConnection))
-			case p2pCtrlDiscoverPeers:
-				co.handleDiscoverPeers(msg.payload.([]string))
+			case p2pCtrlConnectPeers:
+				co.handleConnectPeers(msg.payload.([]string))
 			}
 		case <-ticker.C:
 			co.handleTimeTick()
@@ -62,14 +75,12 @@ func (co *p2pCoordinatorType) handleSearchForBlocks(p2pcStart *p2pConnection) {
 	p2pcStart.chanToPeer <- msg
 }
 
-func (co *p2pCoordinatorType) handleDiscoverPeers(addresses []string) {
+func (co *p2pCoordinatorType) handleConnectPeers(addresses []string) {
 	for _, address := range addresses {
-		i := strings.LastIndex(address, ":")
-		var host string
-		if i > -1 {
-			host = address[0:i]
-		} else {
-			host = address
+		host, _, err := splitAddress(address)
+		if err != nil {
+			log.Println(address, err)
+			continue
 		}
 		canonicalAddress := fmt.Sprintf("%s:%d", host, DefaultP2PPort)
 		if p2pPeers.HasAddress(canonicalAddress) || co.badPeers.Has(canonicalAddress) {
@@ -109,6 +120,7 @@ func (co *p2pCoordinatorType) handleTimeTick() {
 		co.lastReconnectTime = time.Now()
 		co.connectDbPeers()
 	}
+	p2pPeers.tryPeersConnectable()
 }
 
 func (co *p2pCoordinatorType) floodPeersWithNewBlocks(minHeight, maxHeight int) {

@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -245,4 +246,21 @@ func jsonifyWhatever(i interface{}) string {
 		log.Panic(err)
 	}
 	return string(jsonb)
+}
+
+func splitAddress(address string) (string, int, error) {
+	i := strings.LastIndex(address, ":") // Not using strings.Split because of IPv6
+	var host string
+	var port int
+	var err error
+	if i > -1 {
+		host = address[0:i]
+		port, err = strconv.Atoi(address[i+1:])
+		if err != nil {
+			return "", 0, err
+		}
+	} else {
+		host = address
+	}
+	return host, port, nil
 }
