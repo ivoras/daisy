@@ -279,11 +279,13 @@ func (p2pc *p2pConnection) sendMsg(msg interface{}) error {
 
 func (p2pc *p2pConnection) handleConnection() {
 	defer func() {
+		log.Println("Cleaning up connection", p2pc.address)
 		p2pPeers.Remove(p2pc)
 		err := p2pc.conn.Close()
 		if err != nil {
 			log.Printf("p2pc.conn.Close: %v", err)
 		}
+		log.Println("Finished cleaning up connection", p2pc.address)
 	}()
 
 	p2pc.peer = bufio.NewReadWriter(bufio.NewReader(p2pc.conn), bufio.NewWriter(p2pc.conn))
@@ -306,6 +308,7 @@ func (p2pc *p2pConnection) handleConnection() {
 		return
 	}
 	log.Println("Handling connection", p2pc.address)
+	exit := false
 
 	go func() {
 		var line []byte
@@ -336,11 +339,14 @@ func (p2pc *p2pConnection) handleConnection() {
 			}
 			p2pc.chanFromPeer <- msg
 		}
+		log.Println("Shutting down receiver for", p2pc.address)
+		exit = true // In any case, if this goroutine exits, we want to shut down everything
 	}()
 
-	for {
-		exit := false
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 
+	for !exit {
 		select {
 		case msg := <-p2pc.chanFromPeer:
 			// log.Printf("... chainFromPeer: %s: %s", p2pc.address, jsonifyWhatever(msg))
@@ -374,13 +380,12 @@ func (p2pc *p2pConnection) handleConnection() {
 				log.Println("Error sending to peer:", err)
 				exit = true
 			}
-		}
-		if exit {
-			break
+		case <-ticker.C:
+			// so the exit variable gets tested
+			continue
 		}
 	}
 	// The connection has been dismissed
-	log.Println("Closing connection", p2pc.address)
 }
 
 func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
@@ -447,7 +452,7 @@ func (p2pc *p2pConnection) handleGetBlockHashes(msg StrIfMap) {
 		log.Println(p2pc.conn, err)
 		return
 	}
-	log.Printf("Sending block hashes from %d to %d to %s", minBlockHeight, maxBlockHeight, p2pc.address)
+	log.Printf("*** Sending block hashes from %d to %d to %s", minBlockHeight, maxBlockHeight, p2pc.address)
 	respMsg := p2pMsgBlockHashesStruct{
 		p2pMsgHeader: p2pMsgHeader{
 			P2pID: p2pEphemeralID,
@@ -521,7 +526,9 @@ func (p2pc *p2pConnection) handleGetBlock(msg StrIfMap) {
 	}
 	defer func() {
 		err = f.Close()
-		log.Printf("handleGetBlock f.Close: %v", err)
+		if err != nil {
+			log.Printf("handleGetBlock f.Close: %v", err)
+		}
 	}()
 	var zbuf bytes.Buffer
 	w := zlib.NewWriter(&zbuf)
@@ -552,6 +559,7 @@ func (p2pc *p2pConnection) handleGetBlock(msg StrIfMap) {
 		Size:          fileSize,
 	}
 	p2pc.chanToPeer <- respMsg
+	log.Println("*** Sent block", hash, "to", p2pc.address)
 }
 
 // block: A block is received
