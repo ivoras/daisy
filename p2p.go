@@ -16,7 +16,6 @@ import (
 	"os"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -175,6 +174,48 @@ func (p *p2pPeersSet) tryPeersConnectable() {
 	})
 }
 
+func (p *p2pPeersSet) saveConnetablePeers() {
+	dbPeers := dbGetSavedPeers()
+	localAddresses := getLocalAddresses()
+
+	p.lock.With(func() {
+		for peer := range p.peers {
+			if !peer.isConnectable {
+				continue
+			}
+			host, _, err := splitAddress(peer.address)
+			if err != nil {
+				continue
+			}
+			canonicalAddress := fmt.Sprintf("%s:%d", host, DefaultP2PPort)
+			addr, err := net.ResolveTCPAddr("tcp", canonicalAddress)
+			if err != nil {
+				continue
+			}
+			if _, ok := dbPeers[addr.IP.String()]; ok {
+				// Already in db
+				continue
+			}
+			if inStrings(addr.String(), localAddresses) {
+				// Local interface
+				continue
+			}
+			// Detect if there's a canonical peer on the other side, somewhat brute-forceish
+			conn, err := net.DialTCP("tcp", nil, addr)
+			if err != nil {
+				continue
+			}
+			log.Println("Detected canonical peer at", canonicalAddress)
+			err = conn.Close()
+			if err != nil {
+				log.Printf("checkSavePeer conn.Close: %v", err)
+			}
+			dbSavePeer(canonicalAddress)
+		}
+	})
+
+}
+
 func p2pServer() {
 	serverAddress := ":" + strconv.Itoa(cfg.P2pPort)
 	l, err := net.Listen("tcp", serverAddress)
@@ -200,13 +241,11 @@ func p2pServer() {
 			log.Println("Ignoring bad peer", conn.RemoteAddr().String())
 			continue
 		}
-		p2pc := p2pConnection{
-			conn:         conn,
-			address:      conn.RemoteAddr().String(),
-			chanToPeer:   make(chan interface{}, 5),
-			chanFromPeer: make(chan StrIfMap, 5),
+		p2pc, err := p2pSetupPeer(conn.RemoteAddr().String(), conn)
+		if err != nil {
+			log.Println("Error setting up peer", conn.RemoteAddr().String(), err)
+			continue
 		}
-		p2pPeers.Add(&p2pc)
 		go p2pc.handleConnection()
 	}
 }
@@ -389,7 +428,6 @@ func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 		}
 		return
 	}
-	p2pc.checkSavePeer()
 	p2pc.refreshTime = time.Now()
 	if p2pc.chainHeight > dbGetBlockchainHeight() {
 		p2pCtrlChannel <- p2pCtrlMessage{msgType: p2pCtrlSearchForBlocks, payload: p2pc}
@@ -621,28 +659,35 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 	log.Println("Accepted block", blk.Hash, "at height", blk.Height)
 }
 
-func (p2pc *p2pConnection) checkSavePeer() {
-	i := strings.LastIndex(p2pc.address, ":")
-	var host string
-	if i > -1 {
-		host = p2pc.address[0:i]
-	} else {
-		host = p2pc.address
-	}
-	canonicalAddress := fmt.Sprintf("%s:%d", host, DefaultP2PPort)
-	addr, err := net.ResolveTCPAddr("tcp", canonicalAddress)
+// Connect to a peer. Does everything except starting the handler goroutine.
+func p2pConnectPeer(address string) (*p2pConnection, error) {
+	addr, err := net.ResolveTCPAddr("tcp", address)
 	if err != nil {
-		return
+		return nil, err
 	}
-	// Detect if there's a canonical peer on the other side, somewhat brute-forceish
-	conn, err := net.DialTCP("tcp", nil, addr)
+
+	localAddresses := getLocalAddresses()
+	if inStrings(addr.IP.String(), localAddresses) {
+		return nil, fmt.Errorf("Refusing to connect to myself at %s", addr.IP)
+	}
+
+	conn, err := net.Dial("tcp", address)
 	if err != nil {
-		return
+		log.Println("Error connecting to", address, err)
+		return nil, err
 	}
-	log.Println("Detected canonical peer at", canonicalAddress)
-	err = conn.Close()
-	if err != nil {
-		log.Printf("checkSavePeer conn.Close: %v", err)
+	return p2pSetupPeer(address, conn)
+}
+
+// Creates the p2pConnection structure for the peer and adds it to the peer list.
+// Does not start the handler goroutine.
+func p2pSetupPeer(address string, conn net.Conn) (*p2pConnection, error) {
+	p2pc := p2pConnection{
+		conn:         conn,
+		address:      address,
+		chanToPeer:   make(chan interface{}, 5),
+		chanFromPeer: make(chan StrIfMap, 5),
 	}
-	dbSavePeer(canonicalAddress)
+	p2pPeers.Add(&p2pc)
+	return &p2pc, nil
 }

@@ -76,6 +76,8 @@ func (co *p2pCoordinatorType) handleSearchForBlocks(p2pcStart *p2pConnection) {
 }
 
 func (co *p2pCoordinatorType) handleConnectPeers(addresses []string) {
+	localAddresses := getLocalAddresses()
+
 	for _, address := range addresses {
 		host, _, err := splitAddress(address)
 		if err != nil {
@@ -88,20 +90,21 @@ func (co *p2pCoordinatorType) handleConnectPeers(addresses []string) {
 		}
 		addr, err := net.ResolveTCPAddr("tcp", canonicalAddress)
 		if err != nil {
-			return
+			continue
+		}
+		if inStrings(addr.IP.String(), localAddresses) {
+			continue
 		}
 		// Detect if there's a canonical peer on the other side, somewhat brute-forceish
 		conn, err := net.DialTCP("tcp", nil, addr)
 		if err != nil {
 			return
 		}
-		p2pc := p2pConnection{
-			conn:         conn,
-			address:      canonicalAddress,
-			chanToPeer:   make(chan interface{}, 5),
-			chanFromPeer: make(chan StrIfMap, 5),
+		p2pc, err := p2pSetupPeer(addr.String(), conn)
+		if err != nil {
+			log.Println("handleConnectPeers:", err)
+			continue
 		}
-		p2pPeers.Add(&p2pc)
 		go p2pc.handleConnection()
 		log.Println("Detected canonical peer at", canonicalAddress)
 		dbSavePeer(canonicalAddress)
@@ -118,6 +121,7 @@ func (co *p2pCoordinatorType) handleTimeTick() {
 	}
 	if time.Since(co.lastReconnectTime) >= 10*time.Minute {
 		co.lastReconnectTime = time.Now()
+		p2pPeers.saveConnetablePeers()
 		co.connectDbPeers()
 	}
 	p2pPeers.tryPeersConnectable()
@@ -149,18 +153,10 @@ func (co *p2pCoordinatorType) connectDbPeers() {
 		if co.badPeers.Has(peer) {
 			continue
 		}
-		conn, err := net.Dial("tcp", peer)
+		p2pc, err := p2pConnectPeer(peer)
 		if err != nil {
-			log.Println("Error connecting to", peer, err)
 			continue
 		}
-		p2pc := p2pConnection{
-			conn:         conn,
-			address:      peer,
-			chanToPeer:   make(chan interface{}, 5),
-			chanFromPeer: make(chan StrIfMap, 5),
-		}
-		p2pPeers.Add(&p2pc)
 		go p2pc.handleConnection()
 	}
 }

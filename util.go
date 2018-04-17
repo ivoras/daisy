@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -248,6 +249,7 @@ func jsonifyWhatever(i interface{}) string {
 	return string(jsonb)
 }
 
+// Splits an address string in the form of "host:port" into its separate host and port parts
 func splitAddress(address string) (string, int, error) {
 	i := strings.LastIndex(address, ":") // Not using strings.Split because of IPv6
 	var host string
@@ -263,4 +265,42 @@ func splitAddress(address string) (string, int, error) {
 		host = address
 	}
 	return host, port, nil
+}
+
+// Returns a list of local IP addresses
+func getLocalAddresses() []string {
+	addresses := []string{}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		log.Println(err)
+		return addresses
+	}
+	for _, i := range ifaces {
+		addrs, err := i.Addrs()
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			addresses = append(addresses, ip.String())
+		}
+	}
+	return addresses
+}
+
+// Returns true if s is in list
+func inStrings(s string, list []string) bool {
+	for _, x := range list {
+		if s == x {
+			return true
+		}
+	}
+	return false
 }
