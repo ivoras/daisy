@@ -35,15 +35,6 @@ func getNowUTC() int64 {
 	return time.Now().UTC().Unix()
 }
 
-// Mashals the given map of strings to JSON
-func stringMap2JsonBytes(m map[string]string) []byte {
-	b, err := json.Marshal(m)
-	if err != nil {
-		log.Panicln("Cannot json-ise the map:", err)
-	}
-	return b
-}
-
 // Returns a hex-encoded hash of the given byte slice
 func hashBytesToHexString(b []byte) string {
 	hash := sha256.Sum256(b)
