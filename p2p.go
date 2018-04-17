@@ -496,9 +496,10 @@ func (p2pc *p2pConnection) handleBlockHashes(msg StrIfMap) {
 		n++
 	}
 	sort.Ints(heights)
+	log.Println("handleBlockHashes: got", jsonifyWhatever(heights))
 	for h := range heights {
 		if dbBlockHeightExists(h) {
-			//log.Println("Already have block", h)
+			log.Println("handleBlockHashes: already have block:", h)
 			continue
 		}
 		if p2pCoordinator.recentlyRequestedBlocks.TestAndSet(hashes[h]) {

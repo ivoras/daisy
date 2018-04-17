@@ -42,7 +42,7 @@ var p2pCoordinator = p2pCoordinatorType{
 
 func (co *p2pCoordinatorType) Run() {
 	co.lastTickBlockchainHeight = dbGetBlockchainHeight()
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
@@ -116,6 +116,7 @@ func (co *p2pCoordinatorType) handleConnectPeers(addresses []string) {
 func (co *p2pCoordinatorType) handleTimeTick() {
 	newHeight := dbGetBlockchainHeight()
 	if newHeight > co.lastTickBlockchainHeight {
+		log.Println("New blocks detected. New max height:", newHeight)
 		co.floodPeersWithNewBlocks(co.lastTickBlockchainHeight, newHeight)
 		co.lastTickBlockchainHeight = newHeight
 	}
