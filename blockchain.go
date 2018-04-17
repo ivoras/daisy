@@ -95,19 +95,6 @@ func blockchainInit() {
 			log.Panicln("Genesis block hash unexpected:", hashBytesToHexString(genesisBlock))
 		}
 
-		/*
-			// Sign the Genesis block's hash
-			genesisBlockHash, err := hex.DecodeString(GenesisBlockHash)
-			if err != nil {
-				log.Panicln(err)
-			}
-			signature, err = cryptoSignBytes(keypair, genesisBlockHash)
-			if err != nil {
-				log.Panicln(err)
-			}
-			log.Println(hex.EncodeToString(signature))
-		*/
-
 		genesisBlockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, 0)
 		err = ioutil.WriteFile(genesisBlockFilename, genesisBlock, 0644)
 		if err != nil {
