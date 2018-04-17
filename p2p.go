@@ -293,6 +293,13 @@ func (p2pc *p2pConnection) handleConnection() {
 		log.Println("Finished cleaning up connection", p2pc.address)
 	}()
 
+	// Only store the IP address as the address.
+	// This must be done in the goroutine because resolving can block for a long time.
+	addr, err := net.ResolveTCPAddr("tcp", p2pc.address)
+	if err == nil {
+		p2pc.address = addr.String()
+	}
+
 	p2pc.peer = bufio.NewReadWriter(bufio.NewReader(p2pc.conn), bufio.NewWriter(p2pc.conn))
 
 	// XXX: the state machine shouldn't start by the listener sending something
@@ -307,7 +314,7 @@ func (p2pc *p2pConnection) handleConnection() {
 		ChainHeight: dbGetBlockchainHeight(),
 		MyPeers:     p2pPeers.GetAddresses(true),
 	}
-	err := p2pc.sendMsg(helloMsg)
+	err = p2pc.sendMsg(helloMsg)
 	if err != nil {
 		log.Println(err)
 		return
@@ -673,10 +680,15 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 }
 
 // Connect to a peer. Does everything except starting the handler goroutine.
+// Checks if there already is a connection of this type.
 func p2pConnectPeer(address string) (*p2pConnection, error) {
 	addr, err := net.ResolveTCPAddr("tcp", address)
 	if err != nil {
 		return nil, err
+	}
+
+	if p2pPeers.HasAddress(addr.String()) {
+		return nil, fmt.Errorf("Connection to %s already exists", addr.String())
 	}
 
 	localAddresses := getLocalAddresses()
