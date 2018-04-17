@@ -17,9 +17,6 @@ import (
 // CurrentBlockVersion is the version of the block metadata
 const CurrentBlockVersion = 1
 
-// GenesisBlockPreviousBlockHash is the hard-coded canonical stand-in hash of the non-existent previous block
-const GenesisBlockPreviousBlockHash = "1000000000000000000000000000000000000000000000000000000000000001"
-
 // GenesisBlockHash is the SHA256 hash of the genesis block payload
 const GenesisBlockHash = "9a0ff19183d1525a36de803047de4b73eb72506be8c81296eb463476a5c2d9e2"
 
@@ -91,20 +88,6 @@ func blockchainInit() {
 		if err = cryptoVerifyPublicKeyHashSignature(&keypair.PublicKey, publicKeyHash, signature); err != nil {
 			log.Panicln(err)
 		}
-
-		/*
-			// Sign the Genesis block's "previous block" hash
-			genesisPrevBlockHash, err := hex.DecodeString(GenesisBlockPreviousBlockHash)
-			if err != nil {
-				log.Panicln(err)
-			}
-			signature, err = cryptoSignBytes(keypair, genesisPrevBlockHash)
-			if err != nil {
-				log.Panicln(err)
-			}
-			log.Println(GenesisBlockPreviousBlockHash)
-			log.Println(hex.EncodeToString(signature))
-		*/
 
 		// Bring the genesis block into existence
 		genesisBlock := MustAsset("bindata/genesis.db")
