@@ -13,9 +13,6 @@ import (
 // DefaultP2PPort is the default TCP port for p2p connections
 const DefaultP2PPort = 2017
 
-// DefaultConfigFile is the default configuration filename
-const DefaultConfigFile = "/etc/daisy/config.json"
-
 // DefaultDataDir is the default data directory
 const DefaultDataDir = ".daisy"
 
