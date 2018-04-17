@@ -111,7 +111,6 @@ var p2pPeers = p2pPeersSet{peers: make(map[*p2pConnection]time.Time)}
 // Messages to the p2p controller goroutine
 const (
 	p2pCtrlSearchForBlocks = iota
-	p2pCtrlHaveNewBlock
 	p2pCtrlDiscoverPeers
 )
 

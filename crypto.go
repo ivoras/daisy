@@ -147,19 +147,6 @@ func cryptoSignHex(myPrivateKey *ecdsa.PrivateKey, hash string) (string, error) 
 	return hex.EncodeToString(signatureBytes), nil
 }
 
-// Verifies the given signature of a hash, both hex-encoded. Returns nil if everything's ok.
-func cryptoVerifyHex(publicKey *ecdsa.PublicKey, hash string, signature string) error {
-	hashBytes, err := hex.DecodeString(hash)
-	if err != nil {
-		return err
-	}
-	signatureBytes, err := hex.DecodeString(signature)
-	if err != nil {
-		return err
-	}
-	return cryptoVerifyBytes(publicKey, hashBytes, signatureBytes)
-}
-
 // Verifies the given signature of a hash. Returns nil if everything's ok.
 func cryptoVerifyHexBytes(publicKey *ecdsa.PublicKey, hash string, signatureBytes []byte) error {
 	hashBytes, err := hex.DecodeString(hash)
