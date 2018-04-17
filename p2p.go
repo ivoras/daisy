@@ -497,7 +497,7 @@ func (p2pc *p2pConnection) handleBlockHashes(msg StrIfMap) {
 	}
 	sort.Ints(heights)
 	log.Println("handleBlockHashes: got", jsonifyWhatever(heights))
-	for h := range heights {
+	for _, h := range heights {
 		if dbBlockHeightExists(h) {
 			log.Println("handleBlockHashes: already have block:", h)
 			continue
