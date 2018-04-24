@@ -16,7 +16,7 @@ When started, Daisy will initialise its databases and install the default (and c
 
 ## Querying the blockchain
 
-All the blocks in the blockchain can be queried by using a command such as `./daisy query "SELECT COUNT(*) FROM wikinews_titles"` (note the quotes!). This will iterate over all the blocks, and in those blocks where the query is successful, will output the results to stdout as JSON objects separated by newlines. Of course, this is limited to read-only queries.
+All the blocks in the blockchain can be queried at the same time by using a command such as `./daisy query "SELECT COUNT(*) FROM wikinews_titles"` (note the quotes!). This will iterate over all the blocks, and in those blocks where the query is successful, will output the results to stdout as JSON objects separated by newlines. Of course, this is limited to read-only queries.
 
 ## Adding data to the blockchain
 
@@ -53,6 +53,8 @@ Talks / presentations I gave about Daisy:
 
 ## ToDo
 
+* Add a [DHT](https://github.com/nictuku/dht) implementation for node discovery
+* Make creating new blockchains from scratch possible without changing the code
 * Implement nicer error handling when replying to messages
 * Refactor db..., action... and blockchain... funcs into struct methods
 * Implement the "URL" encoding for block transfers: so the data in the JSON messages isn't block data, but an URL to the block data.
@@ -63,8 +65,9 @@ Talks / presentations I gave about Daisy:
 
 *Note:* All this is fluid and can be changed as development progresses.
 
+* This is a database-style blockchain. Daisy doesn't currently implement a cryptocurrency layer (though it would be simple to add this functionality), nor a smart contract layer (which is possible but not as simply). Since Daisy implements a design which is different from common cryptocurrency blockchains, those kinds of features would necessarily be implemented in a different way, with different semantics than what is common.
 * Everyone can download the blockchain, only special "miners" can create ones, in a sort-of web-of-trust way. Those nodes who are able to create new blocks are called "signatories." They are in posssion of an accepted private key.
-* Block payloads are SQLite database files. Except for special metadata tables, their content is not enforced.
+* Block payloads are SQLite database files. Except for a few special metadata tables, their content is not enforced.
 * Blockchain metadata is mostly separate from the block payloads, with some obvious exceptions such as the block hash. Metadata critical for blockchain integrity (like the previous block's hash (merkle)is within the block database)
 * Consensus rules for accepting new blocks:
     * The validity of the SQLite files
@@ -72,7 +75,7 @@ Talks / presentations I gave about Daisy:
     * The validity of the previous block hash in the `_meta` table
     * The previous block hash is signed with a key which is one of the accepted private keys, i.e. signatories, i.e. which is present in the previous blocks' `_keys` table.
     * The `_keys` table contains new signatory keys additions and revocations. Both operations must be signed by a number of currently valid signatories, where the
-      number is given as "1 if height < 149 else floor(log(height)*2)"
+      number is given as `1 if height < 149 else floor(log(height)*2)`
     * Longest chain wins.
 * Flood-based p2p network: every node can request a list of known connections from the other nodes.
 * Each message contains the genesis (root) block hash, so technically multiple chains can safely communicate on the same TCP port
@@ -81,13 +84,13 @@ Talks / presentations I gave about Daisy:
 
 * How to deal with blockchain abuse? I.e. one of the signatories turns out to be an adversary? Some ideas:
 
-  * Limit the amount of data (in bytes) a signatory can add by the signatorie's age (i.e. the longer the key is approved, the more data it can add). This offers absolutely no protection against "sleepers" which turn out to be adversaries after enough time has passed.
+  * Limit the amount of data (in bytes) a signatory can add by the signatory's age (i.e. the longer the key is approved, the more data it can add). This offers absolutely no protection against "sleepers" which turn out to be adversaries after enough time has passed.
   * Require multiple signatures on blocks, which offers no protection against a clique of adversaries, and inconveniences the common use case where there are indeed individul authoritative sources of data.
   * Create a cryptocurrency overlay on the blockchain (possibly using external cryptocurrencies, tokens) where adding data becomes expensive - which doesn't protect against a well-funded adversary.
 
 ## How blocks are created
 
-Blocks are SQLite database files. Every party in posession of an *accepted private key* (i.e. a signatory) can create new blocks and sign them. Blocks are accepted (if other criteria are satisfied) only if they are signed by one of the accepted keys.
+Blocks are SQLite database files. Every party in posession of an *accepted private key* (i.e. a signatory) can create new blocks, sign them, and publish them into the peer-to-peer network. Blocks are accepted (if other criteria are satisfied) only if they are signed by one of the accepted keys.
 
 New blocks can contain operations which add or remove keys from a (global) list of accepted keys, if they contain a sufficient number of signatures from a list of already accepted keys. See the `_keys` table description in the section on Block metadata.
 
