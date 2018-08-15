@@ -65,7 +65,7 @@ func (co *p2pCoordinatorType) handleSearchForBlocks(p2pcStart *p2pConnection) {
 	msg := p2pMsgGetBlockHashesStruct{
 		p2pMsgHeader: p2pMsgHeader{
 			P2pID: p2pEphemeralID,
-			Root:  GenesisBlockHash,
+			Root:  chainParams.GenesisBlockHash,
 			Msg:   p2pMsgGetBlockHashes,
 		},
 		MinBlockHeight: dbGetBlockchainHeight(),
@@ -133,7 +133,7 @@ func (co *p2pCoordinatorType) floodPeersWithNewBlocks(minHeight, maxHeight int) 
 	msg := p2pMsgBlockHashesStruct{
 		p2pMsgHeader: p2pMsgHeader{
 			P2pID: p2pEphemeralID,
-			Root:  GenesisBlockHash,
+			Root:  chainParams.GenesisBlockHash,
 			Msg:   p2pMsgBlockHashes,
 		},
 		Hashes: blockHashes,

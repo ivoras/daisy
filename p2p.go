@@ -312,7 +312,7 @@ func (p2pc *p2pConnection) handleConnection() {
 	helloMsg := p2pMsgHelloStruct{
 		p2pMsgHeader: p2pMsgHeader{
 			P2pID: p2pEphemeralID,
-			Root:  GenesisBlockHash,
+			Root:  chainParams.GenesisBlockHash,
 			Msg:   p2pMsgHello,
 		},
 		Version:     p2pClientVersionString,
@@ -350,8 +350,8 @@ func (p2pc *p2pConnection) handleConnection() {
 				p2pc.chanFromPeer <- StrIfMap{"_error": "Problem with chain root"}
 				break
 			}
-			if root != GenesisBlockHash {
-				log.Printf("Received message from %v for a different chain than mine (%s vs %s). Ignoring.", p2pc.conn, root, GenesisBlockHash)
+			if root != chainParams.GenesisBlockHash {
+				log.Printf("Received message from %v for a different chain than mine (%s vs %s). Ignoring.", p2pc.conn, root, chainParams.GenesisBlockHash)
 				continue
 			}
 			p2pc.chanFromPeer <- msg
@@ -473,7 +473,7 @@ func (p2pc *p2pConnection) handleGetBlockHashes(msg StrIfMap) {
 	respMsg := p2pMsgBlockHashesStruct{
 		p2pMsgHeader: p2pMsgHeader{
 			P2pID: p2pEphemeralID,
-			Root:  GenesisBlockHash,
+			Root:  chainParams.GenesisBlockHash,
 			Msg:   p2pMsgBlockHashes,
 		},
 		Hashes: dbGetHeightHashes(minBlockHeight, maxBlockHeight),
@@ -513,7 +513,7 @@ func (p2pc *p2pConnection) handleBlockHashes(msg StrIfMap) {
 		msg := p2pMsgGetBlockStruct{
 			p2pMsgHeader: p2pMsgHeader{
 				P2pID: p2pEphemeralID,
-				Root:  GenesisBlockHash,
+				Root:  chainParams.GenesisBlockHash,
 				Msg:   p2pMsgGetBlock,
 			},
 			Hash: hashes[h],
@@ -571,7 +571,7 @@ func (p2pc *p2pConnection) handleGetBlock(msg StrIfMap) {
 	respMsg := p2pMsgBlockStruct{
 		p2pMsgHeader: p2pMsgHeader{
 			P2pID: p2pEphemeralID,
-			Root:  GenesisBlockHash,
+			Root:  chainParams.GenesisBlockHash,
 			Msg:   p2pMsgBlock,
 		},
 		Hash:          hash,

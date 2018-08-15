@@ -20,14 +20,14 @@ const CurrentBlockVersion = 1
 // GenesisBlockPreviousBlockHash is the hard-coded canonical stand-in hash of the non-existent previous block
 const GenesisBlockPreviousBlockHash = "1000000000000000000000000000000000000000000000000000000000000001"
 
-// GenesisBlockHash is the SHA256 hash of the genesis block payload
-const GenesisBlockHash = "9a0ff19183d1525a36de803047de4b73eb72506be8c81296eb463476a5c2d9e2"
+var defaultChainParams = ChainParams{
+	GenesisBlockHash:          "9a0ff19183d1525a36de803047de4b73eb72506be8c81296eb463476a5c2d9e2",
+	GenesisBlockHashSignature: "30460221008b8b3b3cfee2493ef58f2f6a1f1768b564f4c9e9a341ad42912cbbcf5c3ec82f022100fbcdfd0258fa1a5b073d18f688c2fb3d8f9a7c59204c6777f2bbf1faeb1eb1ed",
+	GenesisBlockTimestamp:     "2017-05-06T10:38:50Z02:00",
+	//GenesisBlockTimestamp:     "Sat, 06 May 2017 10:38:50 +0200",
+}
 
-// GenesisBlockHashSignature is the signature of the genesis block's hash, with the key in the genesis block
-const GenesisBlockHashSignature = "30460221008b8b3b3cfee2493ef58f2f6a1f1768b564f4c9e9a341ad42912cbbcf5c3ec82f022100fbcdfd0258fa1a5b073d18f688c2fb3d8f9a7c59204c6777f2bbf1faeb1eb1ed"
-
-// GenesisBlockTimestamp is the timestamp of the genesis block
-const GenesisBlockTimestamp = "Sat, 06 May 2017 10:38:50 +0200"
+var chainParams = defaultChainParams
 
 // Blocks (SQLite databases) are stored as flat files in a directory
 const blockchainSubdirectoryName = "blocks"
@@ -108,7 +108,7 @@ func blockchainInit() {
 
 		// Bring the genesis block into existence
 		genesisBlock := MustAsset("bindata/genesis.db")
-		if hashBytesToHexString(genesisBlock) != GenesisBlockHash {
+		if hashBytesToHexString(genesisBlock) != chainParams.GenesisBlockHash {
 			log.Panicln("Genesis block hash unexpected:", hashBytesToHexString(genesisBlock))
 		}
 
@@ -135,11 +135,11 @@ func blockchainInit() {
 			log.Panicln(err)
 		}
 		b.Height = 0
-		b.TimeAccepted, err = time.Parse(time.RFC1123Z, GenesisBlockTimestamp)
+		b.TimeAccepted, err = time.Parse(time.RFC3339, chainParams.GenesisBlockTimestamp)
 		if err != nil {
 			log.Panicln(err)
 		}
-		b.HashSignature, err = hex.DecodeString(GenesisBlockHashSignature)
+		b.HashSignature, err = hex.DecodeString(chainParams.GenesisBlockHashSignature)
 		if err != nil {
 			log.Panicln(err)
 		}
@@ -186,9 +186,9 @@ func blockchainVerifyEverything() error {
 		if fileHash != dbb.Hash {
 			return fmt.Errorf("block %d: file hash %s doesn't match db hash %s", height, fileHash, dbb.Hash)
 		}
-		if height == 0 && fileHash != GenesisBlockHash {
+		if height == 0 && fileHash != chainParams.GenesisBlockHash {
 			return fmt.Errorf("block %d: it's supposed to be the genesis block but its hash doesn't match %s",
-				height, GenesisBlockHash)
+				height, chainParams.GenesisBlockHash)
 		}
 		dbpk, err := dbGetPublicKey(dbb.SignaturePublicKeyHash)
 		if err != nil {

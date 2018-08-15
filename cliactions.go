@@ -34,6 +34,11 @@ func processActions() bool {
 		}
 		actionSignImportBlock(flag.Arg(1))
 		return true
+	case "newchain":
+		if flag.NArg() < 2 {
+			log.Fatal("Not enough arguments: expecing chainparams.json")
+		}
+		actionNewChain(flag.Arg(1))
 	}
 	return false
 }
@@ -171,6 +176,7 @@ func actionHelp() {
 	fmt.Println("\tmykeys\t\tShows a list of my public keys")
 	fmt.Println("\tquery\t\tExecutes a SQL query on the blockchain (expects 1 argument: SQL query)")
 	fmt.Println("\tsignimportblock\tSigns a block (creates metadata tables in it first) and imports it into the blockchain (expects 1 argument: a sqlite db filename)")
+	fmt.Println("\tnewchain\tStarts a new chain with the given parameters (expects 1 argument: chainparams.json)")
 }
 
 // Shows the public keys which correspond to private keys in the system database.
@@ -178,4 +184,8 @@ func actionMyKeys() {
 	for _, k := range dbGetMyPublicKeys() {
 		fmt.Println(k)
 	}
+}
+
+func actionNewChain(jsonFilename string) {
+
 }

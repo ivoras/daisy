@@ -39,7 +39,7 @@ func configInit() {
 
 	// Config file is parsed first
 	for i, arg := range os.Args {
-		if arg == "-conf" {
+		if arg == "-conf" || arg == "--conf" {
 			if i+1 >= len(os.Args) {
 				log.Fatal("-conf requires filename argument")
 			}
