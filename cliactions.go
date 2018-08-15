@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"strconv"
@@ -12,7 +13,9 @@ import (
 )
 
 // The binary can be called with some actions, like signblock, importblock, signkey.
-// This function processes those and returns true if it has found something to execure.
+// This function processes those and returns true if it has found something to execute.
+// The processActions() function is called after the blockchain database is initialised
+// and active.
 func processActions() bool {
 	if flag.NArg() == 0 {
 		return false
@@ -34,11 +37,24 @@ func processActions() bool {
 		}
 		actionSignImportBlock(flag.Arg(1))
 		return true
+	}
+	return false
+}
+
+// processPreBlockchainActions is called to process actions which need to executed
+// before the blockchain database is running.
+func processPreBlockchainActions() bool {
+	if flag.NArg() == 0 {
+		return false
+	}
+	cmd := flag.Arg(0)
+	switch cmd {
 	case "newchain":
 		if flag.NArg() < 2 {
 			log.Fatal("Not enough arguments: expecing chainparams.json")
 		}
 		actionNewChain(flag.Arg(1))
+		return true
 	}
 	return false
 }
@@ -186,6 +202,36 @@ func actionMyKeys() {
 	}
 }
 
+// NewChainParams is extended from ChainParams for new chain creation
+type NewChainParams struct {
+	ChainParams
+	GenesisDb string `json:"genesis_db"`
+}
+
 func actionNewChain(jsonFilename string) {
+	jsonData, err := ioutil.ReadFile(jsonFilename)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ncp := NewChainParams{}
+	err = json.Unmarshal(jsonData, &ncp)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	empty, err := isDirEmpty(cfg.DataDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if !empty {
+		log.Fatal("Data directory must not be empty:", cfg.DataDir)
+	}
+
+	if !fileExists(ncp.GenesisDb) {
+		log.Fatal("Genesis Db file not found:", ncp.GenesisDb)
+	}
+
+	ensureBlockchainSubdirectoryExists()
 
 }

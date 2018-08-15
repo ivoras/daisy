@@ -30,7 +30,7 @@ var defaultChainParams = ChainParams{
 var chainParams = defaultChainParams
 
 // Blocks (SQLite databases) are stored as flat files in a directory
-const blockchainSubdirectoryName = "blocks"
+const blockchainSubdirectoryBaseName = "blocks"
 const blockFilenameFormat = "%s/block_%08x.db"
 
 var blockchainSubdirectory string
@@ -64,9 +64,8 @@ type BlockKeyOp struct {
 	metadata         map[string]string
 }
 
-// Initializes the blockchain: creates database entries and the genesis block file
-func blockchainInit() {
-	blockchainSubdirectory = fmt.Sprintf("%s/%s", cfg.DataDir, blockchainSubdirectoryName)
+func ensureBlockchainSubdirectoryExists() {
+	blockchainSubdirectory = fmt.Sprintf("%s/%s", cfg.DataDir, blockchainSubdirectoryBaseName)
 	if _, err := os.Stat(blockchainSubdirectory); err != nil {
 		// Probably doesn't exist, create it
 		log.Println("Creating directory", blockchainSubdirectory)
@@ -75,7 +74,11 @@ func blockchainInit() {
 			log.Fatalln(err)
 		}
 	}
+}
 
+// Initializes the blockchain: creates database entries and the genesis block file
+func blockchainInit() {
+	ensureBlockchainSubdirectoryExists()
 	if dbGetBlockchainHeight() == -1 {
 		log.Println("Noticing the existence of the Genesis block. Let there be light.")
 

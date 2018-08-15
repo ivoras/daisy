@@ -27,6 +27,9 @@ func main() {
 	signal.Notify(sigChannel, syscall.SIGINT, syscall.SIGTERM)
 
 	configInit()
+	if processPreBlockchainActions() {
+		return
+	}
 	dbInit()
 	cryptoInit()
 	blockchainInit()
