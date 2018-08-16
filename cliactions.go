@@ -234,13 +234,13 @@ func actionNewChain(jsonFilename string) {
 	}
 
 	ensureBlockchainSubdirectoryExists()
-	freshDb := false
+	freshDb := true
 	if ncp.GenesisDb != "" && fileExists(ncp.GenesisDb) {
 		err = blockchainCopyFile(ncp.GenesisDb, 0)
 		if err != nil {
 			log.Fatal(err)
 		}
-		freshDb = true
+		freshDb = false
 	}
 
 	// Modify the new genesis db to include the metadata
@@ -276,6 +276,14 @@ func actionNewChain(jsonFilename string) {
 	err = dbSetMetaString(db, "Timestamp", ncp.GenesisBlockTimestamp)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if len(ncp.BootstrapPeers) > 0 {
+		// bootstrapPeers is required to be filled in before dbInit()
+		bootstrapPeers = peerStringMap{}
+		for _, peer := range ncp.BootstrapPeers {
+			bootstrapPeers[peer] = time.Now()
+		}
 	}
 
 	dbInit()     // Create system databases

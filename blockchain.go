@@ -178,8 +178,14 @@ func blockchainInit(createDefault bool) {
 			if err != nil {
 				log.Fatal("Error decoding chainparams file", cpFilename, err)
 			}
+			peers := dbGetSavedPeers()
+			for _, peer := range chainParams.BootstrapPeers {
+				_, ok := peers[peer]
+				if !ok {
+					dbSavePeer(peer)
+				}
+			}
 		} else {
-			log.Println(cpFilename)
 			log.Println("Using default blockchain params")
 		}
 	}
