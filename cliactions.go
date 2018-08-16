@@ -134,7 +134,6 @@ func actionSignImportBlock(fn string) {
 	if err != nil {
 		log.Panic(err)
 	}
-
 }
 
 // Runs a SQL query over all the blocks.
@@ -221,6 +220,10 @@ func actionNewChain(jsonFilename string) {
 	if ncp.GenesisBlockTimestamp == "" {
 		ncp.GenesisBlockTimestamp = time.Now().Format(time.RFC3339)
 	}
+	if ncp.CreatorPublicKey != "" || ncp.GenesisBlockHash != "" || ncp.GenesisBlockHashSignature != "" {
+		log.Fatal("chainparams.json must not contain cryptographic properties")
+	}
+	log.Println("Creating a new blockchain from", jsonFilename)
 
 	empty, err := isDirEmpty(cfg.DataDir)
 	if err != nil {
@@ -230,9 +233,9 @@ func actionNewChain(jsonFilename string) {
 		log.Fatal("Data directory must not be empty:", cfg.DataDir)
 	}
 
+	ensureBlockchainSubdirectoryExists()
 	freshDb := false
 	if ncp.GenesisDb != "" && fileExists(ncp.GenesisDb) {
-		ensureBlockchainSubdirectoryExists()
 		err = blockchainCopyFile(ncp.GenesisDb, 0)
 		if err != nil {
 			log.Fatal(err)
@@ -242,9 +245,10 @@ func actionNewChain(jsonFilename string) {
 
 	// Modify the new genesis db to include the metadata
 	blockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, 0)
+	log.Println("Creating the genesis block at", blockFilename)
 	db, err := dbOpen(blockFilename, false)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("dbOpen", err)
 	}
 	if freshDb {
 		_, err = db.Exec("PRAGMA page_size=512")
@@ -290,9 +294,10 @@ func actionNewChain(jsonFilename string) {
 	if onePubKey != pubKeys[0] {
 		log.Fatal("The impossible has happened: two attempts to get the single public key have different results:", pubKeys[0], onePubKey)
 	}
+	log.Println("Genesis public key:", onePubKey)
 	prevSig, err := cryptoSignHex(pKey, GenesisBlockPreviousBlockHash)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("cryptoSignHex", err)
 	}
 	err = dbSetMetaString(db, "PreviousBlockHashSignature", prevSig)
 	if err != nil {
@@ -314,10 +319,11 @@ func actionNewChain(jsonFilename string) {
 	}
 	ncp.GenesisBlockHash = hash
 	ncp.CreatorPublicKey = onePubKey
-	ncp.GenesisBlockHashSignature, err = cryptoSignHex(pKey, onePubKey)
+	ncp.GenesisBlockHashSignature, err = cryptoSignHex(pKey, hash)
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Println("Genesis block hash:", ncp.GenesisBlockHash)
 
 	// Save the chainparams to the data dir
 	cpJSON, err := json.Marshal(ncp.ChainParams)
@@ -329,6 +335,26 @@ func actionNewChain(jsonFilename string) {
 		log.Fatal(err)
 	}
 
-	// Reopen everything to verify
+	// Record the genesis block into the system database
+	newBlock := DbBlockchainBlock{
+		Hash:                       ncp.GenesisBlockHash,
+		HashSignature:              mustDecodeHex(ncp.GenesisBlockHashSignature),
+		PreviousBlockHash:          GenesisBlockPreviousBlockHash,
+		PreviousBlockHashSignature: mustDecodeHex(prevSig),
+		Version:                    CurrentBlockVersion,
+		SignaturePublicKeyHash:     onePubKey,
+		Height:                     0,
+		TimeAccepted:               time.Now(),
+	}
+	err = dbInsertBlock(&newBlock)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	// Reopen the database to verify
+	log.Println("Reloading to verify...")
 	blockchainInit(false)
+
+	// If we make it to here, everything's ok.
+	log.Println("All done.")
 }

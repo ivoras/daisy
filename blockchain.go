@@ -165,6 +165,23 @@ func blockchainInit(createDefault bool) {
 		if err != nil {
 			log.Panicln(err)
 		}
+	} else {
+		// The chainparams file will only exist for non-default blockchains
+		cpFilename := fmt.Sprintf("%s/%s", cfg.DataDir, chainParamsBaseName)
+		if fileExists(cpFilename) {
+			log.Println("Loading custom blockchain params from", cpFilename)
+			cpJSON, err := ioutil.ReadFile(cpFilename)
+			if err != nil {
+				log.Fatal("Error reading chainparams file", cpFilename, err)
+			}
+			err = json.Unmarshal(cpJSON, &chainParams)
+			if err != nil {
+				log.Fatal("Error decoding chainparams file", cpFilename, err)
+			}
+		} else {
+			log.Println(cpFilename)
+			log.Println("Using default blockchain params")
+		}
 	}
 	err := blockchainVerifyEverything()
 	if err != nil {

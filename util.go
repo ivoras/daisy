@@ -72,6 +72,14 @@ func hashFileToHexString(fileName string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+func mustDecodeHex(hexs string) []byte {
+	b, err := hex.DecodeString(hexs)
+	if err != nil {
+		log.Panic("mustDecodeHex:", err)
+	}
+	return b
+}
+
 // StrIfMap is a convenient data type for dealing with maps of strings to interface{}
 type StrIfMap map[string]interface{}
 
@@ -321,7 +329,7 @@ func isDirEmpty(name string) (bool, error) {
 }
 
 func fileExists(name string) bool {
-	if _, err := os.Stat("/path/to/whatever"); err == nil {
+	if _, err := os.Stat(name); err == nil {
 		return true
 	}
 	return false
