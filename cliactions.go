@@ -8,7 +8,6 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"strconv"
 	"time"
 )
 
@@ -76,10 +75,10 @@ func actionSignImportBlock(fn string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err = dbSetMeta(db, "Version", strconv.Itoa(CurrentBlockVersion)); err != nil {
+	if err = dbSetMetaInt(db, "Version", CurrentBlockVersion); err != nil {
 		log.Panic(err)
 	}
-	err = dbSetMeta(db, "PreviousBlockHash", dbb.Hash)
+	err = dbSetMetaString(db, "PreviousBlockHash", dbb.Hash)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -87,7 +86,7 @@ func actionSignImportBlock(fn string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = dbSetMeta(db, "PreviousBlockHashSignature", signature)
+	err = dbSetMetaString(db, "PreviousBlockHashSignature", signature)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -100,12 +99,12 @@ func actionSignImportBlock(fn string) {
 		log.Fatal(err)
 	}
 	if creatorString, ok := pkdb.metadata["BlockCreator"]; ok {
-		err = dbSetMeta(db, "Creator", creatorString)
+		err = dbSetMetaString(db, "Creator", creatorString)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
-	err = dbSetMeta(db, "CreatorPublicKey", pkdb.publicKeyHash)
+	err = dbSetMetaString(db, "CreatorPublicKey", pkdb.publicKeyHash)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -219,6 +218,9 @@ func actionNewChain(jsonFilename string) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if ncp.GenesisBlockTimestamp == "" {
+		ncp.GenesisBlockTimestamp = time.Now().Format(time.RFC3339)
+	}
 
 	empty, err := isDirEmpty(cfg.DataDir)
 	if err != nil {
@@ -228,10 +230,105 @@ func actionNewChain(jsonFilename string) {
 		log.Fatal("Data directory must not be empty:", cfg.DataDir)
 	}
 
-	if !fileExists(ncp.GenesisDb) {
-		log.Fatal("Genesis Db file not found:", ncp.GenesisDb)
+	freshDb := false
+	if ncp.GenesisDb != "" && fileExists(ncp.GenesisDb) {
+		ensureBlockchainSubdirectoryExists()
+		err = blockchainCopyFile(ncp.GenesisDb, 0)
+		if err != nil {
+			log.Fatal(err)
+		}
+		freshDb = true
 	}
 
-	ensureBlockchainSubdirectoryExists()
+	// Modify the new genesis db to include the metadata
+	blockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, 0)
+	db, err := dbOpen(blockFilename, false)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if freshDb {
+		_, err = db.Exec("PRAGMA page_size=512")
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	_, err = db.Exec("PRAGMA journal_mode=DELETE")
+	if err != nil {
+		log.Fatal(err)
+	}
+	dbEnsureBlockchainTables(db)
+	err = dbSetMetaInt(db, "Version", CurrentBlockVersion)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = dbSetMetaString(db, "PreviousBlockHash", GenesisBlockPreviousBlockHash)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = dbSetMetaString(db, "Creator", ncp.Creator)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = dbSetMetaString(db, "Timestamp", ncp.GenesisBlockTimestamp)
+	if err != nil {
+		log.Fatal(err)
+	}
 
+	dbInit()     // Create system databases
+	cryptoInit() // Create the genesis keypair
+
+	pubKeys := dbGetMyPublicKeys()
+	if len(pubKeys) != 1 {
+		log.Fatal("There should have been only one genesis keypair, found", len(pubKeys))
+	}
+	err = dbSetMetaString(db, "CreatorPublicKey", pubKeys[0])
+
+	pKey, onePubKey, err := cryptoGetAPrivateKey()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if onePubKey != pubKeys[0] {
+		log.Fatal("The impossible has happened: two attempts to get the single public key have different results:", pubKeys[0], onePubKey)
+	}
+	prevSig, err := cryptoSignHex(pKey, GenesisBlockPreviousBlockHash)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = dbSetMetaString(db, "PreviousBlockHashSignature", prevSig)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = dbSetMetaString(db, "CreatorPubKey", onePubKey)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = db.Close()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Hash it, sign it, generate chainparams
+	hash, err := hashFileToHexString(blockFilename)
+	if err != nil {
+		log.Fatal(err)
+	}
+	ncp.GenesisBlockHash = hash
+	ncp.CreatorPublicKey = onePubKey
+	ncp.GenesisBlockHashSignature, err = cryptoSignHex(pKey, onePubKey)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Save the chainparams to the data dir
+	cpJSON, err := json.Marshal(ncp.ChainParams)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = ioutil.WriteFile(fmt.Sprintf("%s/%s", cfg.DataDir, chainParamsBaseName), cpJSON, 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Reopen everything to verify
+	blockchainInit(false)
 }

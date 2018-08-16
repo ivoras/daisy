@@ -20,6 +20,7 @@ const CurrentBlockVersion = 1
 // GenesisBlockPreviousBlockHash is the hard-coded canonical stand-in hash of the non-existent previous block
 const GenesisBlockPreviousBlockHash = "1000000000000000000000000000000000000000000000000000000000000001"
 
+// ChainParams describe the genesis block and other blockchain properties
 var defaultChainParams = ChainParams{
 	GenesisBlockHash:          "9a0ff19183d1525a36de803047de4b73eb72506be8c81296eb463476a5c2d9e2",
 	GenesisBlockHashSignature: "30460221008b8b3b3cfee2493ef58f2f6a1f1768b564f4c9e9a341ad42912cbbcf5c3ec82f022100fbcdfd0258fa1a5b073d18f688c2fb3d8f9a7c59204c6777f2bbf1faeb1eb1ed",
@@ -28,6 +29,8 @@ var defaultChainParams = ChainParams{
 }
 
 var chainParams = defaultChainParams
+
+const chainParamsBaseName = "chainparams.json"
 
 // Blocks (SQLite databases) are stored as flat files in a directory
 const blockchainSubdirectoryBaseName = "blocks"
@@ -77,9 +80,9 @@ func ensureBlockchainSubdirectoryExists() {
 }
 
 // Initializes the blockchain: creates database entries and the genesis block file
-func blockchainInit() {
+func blockchainInit(createDefault bool) {
 	ensureBlockchainSubdirectoryExists()
-	if dbGetBlockchainHeight() == -1 {
+	if dbGetBlockchainHeight() == -1 && createDefault {
 		log.Println("Noticing the existence of the Genesis block. Let there be light.")
 
 		// This is basically testing the crypto code, no real purpose.
@@ -374,7 +377,7 @@ func OpenBlockByHeight(height int) (*Block, error) {
 }
 
 // OpenBlockFile reads block metadata from the given database file.
-// Note that it will not fill-in all the fields. Notable, height is not stored in tje block db's metadata.
+// Note that it will not fill-in all the fields. Notable, height is not stored in the block db's metadata.
 func OpenBlockFile(fileName string) (*Block, error) {
 	hash, err := hashFileToHexString(fileName)
 	if err != nil {
@@ -500,7 +503,13 @@ func dbEnsureBlockchainTables(db *sql.DB) {
 }
 
 // Stores a key-value pair into the _meta table in the SQLite database
-func dbSetMeta(db *sql.DB, key string, value string) error {
+func dbSetMetaString(db *sql.DB, key string, value string) error {
+	_, err := db.Exec("INSERT OR REPLACE INTO _meta(key, value) VALUES (?, ?)", key, value)
+	return err
+}
+
+// Stores a key-value pair into the _meta table in the SQLite database
+func dbSetMetaInt(db *sql.DB, key string, value int) error {
 	_, err := db.Exec("INSERT OR REPLACE INTO _meta(key, value) VALUES (?, ?)", key, value)
 	return err
 }

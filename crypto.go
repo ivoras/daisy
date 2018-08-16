@@ -23,7 +23,7 @@ type ecdsaSignature struct {
 
 func cryptoInit() {
 	if dbNumPrivateKeys() == 0 {
-		log.Println("Generating the default private key...")
+		log.Println("Generating the genesis private key...")
 		generatePrivateKey(-1)
 		log.Println("Generated.")
 	}
@@ -59,6 +59,7 @@ func getPubKeyHash(b []byte) string {
 }
 
 // getAPrivateKey returns a random keypair read from the database
+// This is mostly useful when the database has only one keypair ;)
 func cryptoGetAPrivateKey() (*ecdsa.PrivateKey, string, error) {
 	privateKeyBytes, publicKeyHash, err := dbGetAPrivateKey()
 	if err != nil {
@@ -158,6 +159,19 @@ func cryptoVerifyHex(publicKey *ecdsa.PublicKey, hash string, signature string) 
 		return err
 	}
 	return cryptoVerifyBytes(publicKey, hashBytes, signatureBytes)
+}
+
+// Signs a hex-encoded byte blob. and returns a signature byte blob
+func cryptoSignHexBytes(myPrivateKey *ecdsa.PrivateKey, hash string) ([]byte, error) {
+	hashBytes, err := hex.DecodeString(hash)
+	if err != nil {
+		return nil, err
+	}
+	signatureBytes, err := cryptoSignBytes(myPrivateKey, hashBytes)
+	if err != nil {
+		return nil, err
+	}
+	return signatureBytes, nil
 }
 
 // Verifies the given signature of a hash. Returns nil if everything's ok.

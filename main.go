@@ -32,7 +32,7 @@ func main() {
 	}
 	dbInit()
 	cryptoInit()
-	blockchainInit()
+	blockchainInit(true)
 	if processActions() {
 		return
 	}
