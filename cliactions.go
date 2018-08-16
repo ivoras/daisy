@@ -32,7 +32,7 @@ func processActions() bool {
 		return true
 	case "signimportblock":
 		if flag.NArg() < 2 {
-			log.Fatal("Not enough arguments: expecting sqlite db filename")
+			log.Fatal("Not enough arguments: expecting <sqlite db filename>")
 		}
 		actionSignImportBlock(flag.Arg(1))
 		return true
