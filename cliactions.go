@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"reflect"
 	"time"
 )
 
@@ -167,7 +168,11 @@ func actionQuery(q string) {
 			row := make(map[string]interface{})
 			for i, colName := range cols {
 				val := columnPointers[i].(*interface{})
-				row[colName] = *val
+				if reflect.TypeOf(*val).String() == "[]uint8" {
+					row[colName] = string((*val).([]byte))
+				} else {
+					row[colName] = *val
+				}
 			}
 			buf, err := json.Marshal(row)
 			if err != nil {
