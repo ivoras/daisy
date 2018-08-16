@@ -4,6 +4,8 @@ Current status: early alpha / nearly feature-complete.
 
 [Read Daisy's whitepaper here](https://docs.google.com/document/d/1YnFKQaXjTBPZ1e-x8tQ2oxddIoc0P-mfQ4hjUuuNzS4/edit?usp=sharing) to find out what it does and how to get started.
 
+[Read how to start custom / private Daisy blockchains here](https://steemit.com/blockchain/@ivoras/creating-a-custom-private-sql-blockchain-with-daisy).
+
 # What if...
 
 What if there is a blockchain where only certain nodes, in possession of one of accepted private keys, can add data (i.e. new blocks) to a blockchain, whose blocks are (SQLite) databases, and where those existing nodes can accept new ones into their ranks by signing the candidate's keys in a web-of-trust style?
