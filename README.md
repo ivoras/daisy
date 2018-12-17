@@ -56,7 +56,7 @@ Talks / presentations I gave about Daisy:
 ## ToDo
 
 * Add a [DHT](https://github.com/nictuku/dht) implementation for node discovery
-* Make creating new blockchains from scratch possible without changing the code
+* ✔ Make creating new blockchains from scratch possible without changing the code
 * Implement nicer error handling when replying to messages
 * Refactor db..., action... and blockchain... funcs into struct methods
 * Implement the "URL" encoding for block transfers: so the data in the JSON messages isn't block data, but an URL to the block data.
