@@ -303,6 +303,9 @@ func getLocalAddresses() []string {
 		return addresses
 	}
 	for _, i := range ifaces {
+		if strings.HasPrefix(i.Name, "lo") {
+			continue
+		}
 		addrs, err := i.Addrs()
 		if err != nil {
 			log.Println(err)
@@ -315,6 +318,9 @@ func getLocalAddresses() []string {
 				ip = v.IP
 			case *net.IPAddr:
 				ip = v.IP
+			}
+			if strings.HasPrefix(ip.String(), "127.") {
+				continue
 			}
 			addresses = append(addresses, ip.String())
 		}

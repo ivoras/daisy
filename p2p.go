@@ -577,6 +577,7 @@ func (p2pc *p2pConnection) handleGetBlock(msg StrIfMap) {
 	} else {
 		msgBlockEncoding = "http"
 		msgBlockData = fmt.Sprintf("http://%s:%d/block/%d", getLocalAddresses()[0], cfg.httpPort, dbb.Height)
+		log.Println("*** Instructing the peer to get a block from", msgBlockData)
 	}
 
 	respMsg := p2pMsgBlockStruct{
@@ -683,7 +684,7 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 				log.Printf("remove: %v", err)
 			}
 		}()
-		log.Println("Getting block", height, "from", dataString)
+		log.Println("Getting block", hash, "from", dataString)
 		resp, err := http.Get(dataString)
 		if err != nil {
 			log.Println("Error receiving block at", dataString, err)
