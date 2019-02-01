@@ -669,21 +669,6 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 			return
 		}
 	} else if encoding == "http" {
-		blockFile, err = ioutil.TempFile("", "daisy")
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		defer func() {
-			err = blockFile.Close()
-			if err != nil {
-				log.Printf("handleBlock blockFile.Close: %v", err)
-			}
-			err = os.Remove(blockFile.Name())
-			if err != nil {
-				log.Printf("remove: %v", err)
-			}
-		}()
 		log.Println("Getting block", hash, "from", dataString)
 		resp, err := http.Get(dataString)
 		if err != nil {
@@ -691,15 +676,34 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 			return
 		}
 		defer resp.Body.Close()
+		blockFile, err = ioutil.TempFile("", "daisy")
+		if err != nil {
+			log.Println(err)
+			return
+		}
 		written, err := io.Copy(blockFile, resp.Body)
 		if err != nil {
 			log.Println("Error saving block:", err)
+			blockFile.Close()
+			os.Remove(blockFile.Name())
 			return
 		}
 		if written != fileSize {
 			log.Println("Error decoding block: sizes don't match:", written, "vs", fileSize)
+			blockFile.Close()
+			os.Remove(blockFile.Name())
 			return
 		}
+		err = blockFile.Close()
+		if err != nil {
+			log.Printf("handleBlock blockFile.Close: %v", err)
+		}
+		defer func() {
+			err = os.Remove(blockFile.Name())
+			if err != nil {
+				log.Printf("remove: %v", err)
+			}
+		}()
 	} else {
 		log.Println("Unknown block encoding:", encoding)
 		return
