@@ -23,7 +23,7 @@ type ecdsaSignature struct {
 
 func cryptoInit() {
 	if dbNumPrivateKeys() == 0 {
-		log.Println("Generating the keypair...")
+		log.Println("Generating the initial wallet keypair...")
 		generatePrivateKey(-1)
 		log.Println("Generated.")
 	}
