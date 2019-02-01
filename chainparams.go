@@ -16,4 +16,7 @@ type ChainParams struct {
 
 	// List of host:port string specifying default peers for this blockchain. If empty, the defaults are used.
 	BootstrapPeers []string `json:"bootstrap_peers"`
+
+	// Description of the blockchain (e.g. its purpose)
+	Description string `json:"description"`
 }
