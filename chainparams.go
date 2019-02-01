@@ -1,5 +1,10 @@
 package main
 
+const (
+	ChainConsensusPoA = 0
+	ChainConsensusPoW = 1
+)
+
 // ChainParams holds blockchain configuration
 type ChainParams struct {
 	// GenesisBlockHash is the SHA256 hash of the genesis block payload
@@ -16,4 +21,8 @@ type ChainParams struct {
 
 	// List of host:port string specifying default peers for this blockchain. If empty, the defaults are used.
 	BootstrapPeers []string `json:"bootstrap_peers"`
+
+	// Consensus algorithm used: "PoA", "PoW"
+	ConsensusTypeString string `json:"consensus_type"`
+	ConsensusType       int
 }

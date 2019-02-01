@@ -72,6 +72,25 @@ func hashFileToHexString(fileName string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+func hashFileToBytes(fileName string) ([]byte, error) {
+	file, err := os.Open(fileName)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		err = file.Close()
+		if err != nil {
+			log.Printf("hashFileToHexString file.Close: %v", err)
+		}
+	}()
+	hash := sha256.New()
+	_, err = io.Copy(hash, file)
+	if err != nil {
+		return nil, err
+	}
+	return hash.Sum(nil), nil
+}
+
 func mustDecodeHex(hexs string) []byte {
 	b, err := hex.DecodeString(hexs)
 	if err != nil {
@@ -355,4 +374,22 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return out.Close()
+}
+
+func countStartZeroBits(b []byte) int {
+	nBits := 0
+	for i := 0; i < len(b); i++ {
+		if b[i] == 0 {
+			nBits += 8
+		} else {
+			for z := uint(7); z >= 0; z-- {
+				if b[i]&(1<<z) == 0 {
+					nBits++
+				} else {
+					break
+				}
+			}
+		}
+	}
+	return nBits
 }

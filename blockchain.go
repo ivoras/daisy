@@ -22,10 +22,10 @@ const GenesisBlockPreviousBlockHash = "10000000000000000000000000000000000000000
 
 // ChainParams describe the genesis block and other blockchain properties
 var defaultChainParams = ChainParams{
+	ConsensusType:             ChainConsensusPoA,
 	GenesisBlockHash:          "9a0ff19183d1525a36de803047de4b73eb72506be8c81296eb463476a5c2d9e2",
 	GenesisBlockHashSignature: "30460221008b8b3b3cfee2493ef58f2f6a1f1768b564f4c9e9a341ad42912cbbcf5c3ec82f022100fbcdfd0258fa1a5b073d18f688c2fb3d8f9a7c59204c6777f2bbf1faeb1eb1ed",
 	GenesisBlockTimestamp:     "2017-05-06T10:38:50Z02:00",
-	//GenesisBlockTimestamp:     "Sat, 06 May 2017 10:38:50 +0200",
 }
 
 var chainParams = defaultChainParams
