@@ -37,7 +37,7 @@ func blockWebServer() {
 	r := mux.NewRouter()
 	r.HandleFunc("/block/{height}", blockWebSendBlock)
 
-	serverAddress := fmt.Sprintf(":%d", DefaultBlockWebServerPort)
+	serverAddress := fmt.Sprintf(":%d", cfg.httpPort)
 
 	log.Println("HTTP listening on", serverAddress)
 	err := http.ListenAndServe(serverAddress, r)
