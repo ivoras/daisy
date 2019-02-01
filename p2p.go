@@ -683,6 +683,7 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 				log.Printf("remove: %v", err)
 			}
 		}()
+		log.Println("Getting block", height, "from", dataString)
 		resp, err := http.Get(dataString)
 		if err != nil {
 			log.Println("Error receiving block at", dataString, err)
@@ -690,6 +691,10 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 		}
 		defer resp.Body.Close()
 		written, err := io.Copy(blockFile, resp.Body)
+		if err != nil {
+			log.Println("Error saving block:", err)
+			return
+		}
 		if written != fileSize {
 			log.Println("Error decoding block: sizes don't match:", written, "vs", fileSize)
 			return
