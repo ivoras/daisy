@@ -40,6 +40,7 @@ func main() {
 	go p2pCoordinator.Run()
 	go p2pServer()
 	go p2pClient()
+	go blockWebServer()
 
 	for {
 		select {

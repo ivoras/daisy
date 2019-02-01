@@ -25,4 +25,7 @@ type ChainParams struct {
 	// Consensus algorithm used: "PoA", "PoW"
 	ConsensusTypeString string `json:"consensus_type"`
 	ConsensusType       int
+
+	// Description of the blockchain (e.g. its purpose)
+	Description string `json:"description"`
 }

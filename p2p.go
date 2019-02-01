@@ -13,6 +13,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"sort"
 	"strconv"
@@ -239,7 +240,7 @@ func p2pServer() {
 			log.Fatalf("p2pServer l.Close: %v", err)
 		}
 	}()
-	log.Println("Listening on", serverAddress)
+	log.Println("P2P listening on", serverAddress)
 	for {
 		conn, err := l.Accept()
 		if err != nil {
@@ -541,33 +542,43 @@ func (p2pc *p2pConnection) handleGetBlock(msg StrIfMap) {
 		return
 	}
 	fileSize := st.Size()
-	f, err := os.Open(fileName)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer func() {
-		err = f.Close()
+
+	var msgBlockEncoding, msgBlockData string
+
+	if cfg.p2pBlockInline {
+		f, err := os.Open(fileName)
 		if err != nil {
-			log.Printf("handleGetBlock f.Close: %v", err)
+			log.Println(err)
+			return
 		}
-	}()
-	var zbuf bytes.Buffer
-	w := zlib.NewWriter(&zbuf)
-	written, err := io.Copy(w, f)
-	if err != nil {
-		log.Println(err)
-		return
+		defer func() {
+			err = f.Close()
+			if err != nil {
+				log.Printf("handleGetBlock f.Close: %v", err)
+			}
+		}()
+		var zbuf bytes.Buffer
+		w := zlib.NewWriter(&zbuf)
+		written, err := io.Copy(w, f)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		if written != fileSize {
+			log.Println("Something broke when working with zlib:", written, "vs", fileSize)
+			return
+		}
+		err = w.Close()
+		if err != nil {
+			log.Panic(err)
+		}
+		msgBlockEncoding = "zlib-base64"
+		msgBlockData = base64.StdEncoding.EncodeToString(zbuf.Bytes())
+	} else {
+		msgBlockEncoding = "http"
+		msgBlockData = fmt.Sprintf("http://%s:%d/block/%d", getLocalAddresses()[0], cfg.httpPort, dbb.Height)
 	}
-	if written != fileSize {
-		log.Println("Something broke when working with zlib:", written, "vs", fileSize)
-		return
-	}
-	err = w.Close()
-	if err != nil {
-		log.Panic(err)
-	}
-	b64block := base64.StdEncoding.EncodeToString(zbuf.Bytes())
+
 	respMsg := p2pMsgBlockStruct{
 		p2pMsgHeader: p2pMsgHeader{
 			P2pID: p2pEphemeralID,
@@ -576,8 +587,8 @@ func (p2pc *p2pConnection) handleGetBlock(msg StrIfMap) {
 		},
 		Hash:          hash,
 		HashSignature: hex.EncodeToString(dbb.HashSignature),
-		Encoding:      "zlib-base64",
-		Data:          b64block,
+		Encoding:      msgBlockEncoding,
+		Data:          msgBlockData,
 		Size:          fileSize,
 	}
 	p2pc.chanToPeer <- respMsg
@@ -615,50 +626,79 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 		log.Printf("encoding: %v", err)
 		return
 	}
-	if encoding != "zlib-base64" {
-		log.Println("Unsupported encoding:", encoding)
-		return
-	}
-	zlibData, err := base64.StdEncoding.DecodeString(dataString)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	blockFile, err = ioutil.TempFile("", "daisy")
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer func() {
-		err = blockFile.Close()
+	if encoding == "zlib-base64" {
+		zlibData, err := base64.StdEncoding.DecodeString(dataString)
 		if err != nil {
-			log.Printf("handleBlock blockFile.Close: %v", err)
+			log.Println(err)
+			return
 		}
-		err = os.Remove(blockFile.Name())
+		blockFile, err = ioutil.TempFile("", "daisy")
 		if err != nil {
-			log.Printf("remove: %v", err)
+			log.Println(err)
+			return
 		}
-	}()
-	r, err := zlib.NewReader(bytes.NewReader(zlibData))
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer func() {
-		err = r.Close()
+		defer func() {
+			err = blockFile.Close()
+			if err != nil {
+				log.Printf("handleBlock blockFile.Close: %v", err)
+			}
+			err = os.Remove(blockFile.Name())
+			if err != nil {
+				log.Printf("remove: %v", err)
+			}
+		}()
+		r, err := zlib.NewReader(bytes.NewReader(zlibData))
 		if err != nil {
-			log.Printf("handleBlock r.Close: %v", err)
+			log.Println(err)
+			return
 		}
-	}()
-	written, err := io.Copy(blockFile, r)
-	if err != nil {
-		log.Println(err)
+		defer func() {
+			err = r.Close()
+			if err != nil {
+				log.Printf("handleBlock r.Close: %v", err)
+			}
+		}()
+		written, err := io.Copy(blockFile, r)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		if written != fileSize {
+			log.Println("Error decoding block: sizes don't match:", written, "vs", fileSize)
+			return
+		}
+	} else if encoding == "http" {
+		blockFile, err = ioutil.TempFile("", "daisy")
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		defer func() {
+			err = blockFile.Close()
+			if err != nil {
+				log.Printf("handleBlock blockFile.Close: %v", err)
+			}
+			err = os.Remove(blockFile.Name())
+			if err != nil {
+				log.Printf("remove: %v", err)
+			}
+		}()
+		resp, err := http.Get(dataString)
+		if err != nil {
+			log.Println("Error receiving block at", dataString, err)
+			return
+		}
+		defer resp.Body.Close()
+		written, err := io.Copy(blockFile, resp.Body)
+		if written != fileSize {
+			log.Println("Error decoding block: sizes don't match:", written, "vs", fileSize)
+			return
+		}
+	} else {
+		log.Println("Unknown block encoding:", encoding)
 		return
 	}
-	if written != fileSize {
-		log.Println("Error decoding block: sizes don't match:", written, "vs", fileSize)
-		return
-	}
+
 	blk, err := OpenBlockFile(blockFile.Name())
 	if err != nil {
 		log.Println(p2pc.conn, err)

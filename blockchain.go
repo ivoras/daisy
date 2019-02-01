@@ -47,7 +47,7 @@ var blockchainSubdirectory string
  * CreatorPublicKey|1:a3c07ef6cbee246f231a61ff36bbcd8e8563723e3703eb345ecdd933d7709ae2
  * Version|1
  *
- * Of these, only the Creator field is optional. By default, for new block, it is taken
+ * Of these, only the Creator field is optional. By default, for new blocks, it is taken
  * from the "BlockCreator" field in the pubkey metadata (if it exists).
  */
 
@@ -198,6 +198,11 @@ func blockchainInit(createDefault bool) {
 // Verifies the entire blockchain to see if there are errors.
 // TODO: Dynamic adding and revoking of key is not yet checked
 func blockchainVerifyEverything() error {
+	if cfg.faster {
+		log.Println("Skipping blockchain consistency checks")
+		return nil
+	}
+	log.Println("Verifying all the blocks...")
 	maxHeight := dbGetBlockchainHeight()
 	for height := 0; height <= maxHeight; height++ {
 		if height > 0 && height%1000 == 0 {

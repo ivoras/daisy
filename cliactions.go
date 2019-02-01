@@ -282,6 +282,10 @@ func actionNewChain(jsonFilename string) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	err = dbSetMetaString(db, "Description", ncp.Description)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	if len(ncp.BootstrapPeers) > 0 {
 		// bootstrapPeers is required to be filled in before dbInit()

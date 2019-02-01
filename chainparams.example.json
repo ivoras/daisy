@@ -2,5 +2,6 @@
     "consensus_type": "PoA",
     "creator": "Ivan Voras <ivoras@gmail.com>",
     "genesis_block_timestamp": "2018-08-16T12:49:32+02:00",
-    "bootstrap_peers": [ "cosmos.ivoras.net:2017" ]
+    "bootstrap_peers": [ "cosmos.ivoras.net:2017" ],
+    "description": "The Mighty Blockchain"
 }

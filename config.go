@@ -13,6 +13,9 @@ import (
 // DefaultP2PPort is the default TCP port for p2p connections
 const DefaultP2PPort = 2017
 
+// DefaultBlockWebServerPort is the default TCP port for the HTTP server
+const DefaultBlockWebServerPort = 2018
+
 // DefaultConfigFile is the default configuration filename
 const DefaultConfigFile = "/etc/daisy/config.json"
 
@@ -20,10 +23,13 @@ const DefaultConfigFile = "/etc/daisy/config.json"
 const DefaultDataDir = ".daisy"
 
 var cfg struct {
-	configFile string
-	P2pPort    int    `json:"p2p_port"`
-	DataDir    string `json:"data_dir"`
-	showHelp   bool
+	configFile     string
+	P2pPort        int    `json:"p2p_port"`
+	DataDir        string `json:"data_dir"`
+	httpPort       int
+	showHelp       bool
+	faster         bool
+	p2pBlockInline bool
 }
 
 // Initialises defaults, parses command line
@@ -36,6 +42,7 @@ func configInit() {
 
 	// Init defaults
 	cfg.P2pPort = DefaultP2PPort
+	cfg.httpPort = DefaultBlockWebServerPort
 
 	// Config file is parsed first
 	for i, arg := range os.Args {
@@ -52,8 +59,11 @@ func configInit() {
 
 	// Then override the configuration with command-line flags
 	flag.IntVar(&cfg.P2pPort, "port", cfg.P2pPort, "P2P port")
+	flag.IntVar(&cfg.httpPort, "http-port", cfg.httpPort, "HTTP port")
 	flag.StringVar(&cfg.DataDir, "dir", cfg.DataDir, "Data directory")
 	flag.BoolVar(&cfg.showHelp, "help", false, "Shows CLI usage information")
+	flag.BoolVar(&cfg.faster, "faster", false, "Be faster when starting up")
+	flag.BoolVar(&cfg.p2pBlockInline, "p2pblockinline", false, "Send blocks to peers inline instead of over HTTP")
 	flag.Parse()
 
 	if cfg.showHelp {
