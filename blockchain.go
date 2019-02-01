@@ -198,6 +198,11 @@ func blockchainInit(createDefault bool) {
 // Verifies the entire blockchain to see if there are errors.
 // TODO: Dynamic adding and revoking of key is not yet checked
 func blockchainVerifyEverything() error {
+	if cfg.faster {
+		log.Println("Skipping blockchain consistency checks")
+		return nil
+	}
+	log.Println("Verifying all the blocks...")
 	maxHeight := dbGetBlockchainHeight()
 	for height := 0; height <= maxHeight; height++ {
 		if height > 0 && height%1000 == 0 {

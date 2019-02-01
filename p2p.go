@@ -239,7 +239,7 @@ func p2pServer() {
 			log.Fatalf("p2pServer l.Close: %v", err)
 		}
 	}()
-	log.Println("Listening on", serverAddress)
+	log.Println("P2P listening on", serverAddress)
 	for {
 		conn, err := l.Accept()
 		if err != nil {

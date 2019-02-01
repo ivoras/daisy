@@ -13,6 +13,9 @@ import (
 // DefaultP2PPort is the default TCP port for p2p connections
 const DefaultP2PPort = 2017
 
+// DefaultBlockWebServerPort is the default TCP port for the HTTP server
+const DefaultBlockWebServerPort = 2018
+
 // DefaultConfigFile is the default configuration filename
 const DefaultConfigFile = "/etc/daisy/config.json"
 
@@ -24,6 +27,7 @@ var cfg struct {
 	P2pPort    int    `json:"p2p_port"`
 	DataDir    string `json:"data_dir"`
 	showHelp   bool
+	faster     bool
 }
 
 // Initialises defaults, parses command line
@@ -54,6 +58,7 @@ func configInit() {
 	flag.IntVar(&cfg.P2pPort, "port", cfg.P2pPort, "P2P port")
 	flag.StringVar(&cfg.DataDir, "dir", cfg.DataDir, "Data directory")
 	flag.BoolVar(&cfg.showHelp, "help", false, "Shows CLI usage information")
+	flag.BoolVar(&cfg.faster, "faster", false, "Be faster when starting up")
 	flag.Parse()
 
 	if cfg.showHelp {
