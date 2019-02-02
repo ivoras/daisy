@@ -737,6 +737,7 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 		return
 	}
 	log.Println("Accepted block", blk.Hash, "at height", blk.Height)
+	blk.Close()
 }
 
 // Connect to a peer. Does everything except starting the handler goroutine.

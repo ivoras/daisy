@@ -254,7 +254,13 @@ func blockchainVerifyEverything() error {
 		}
 		blockKeyOps, err := b.dbGetKeyOps()
 		if err != nil {
+			if err := b.Close(); err != nil {
+				panic(err)
+			}
 			return fmt.Errorf("block %d: cannot get key ops: %v", height, err)
+		}
+		if err = b.Close(); err != nil {
+			panic(err)
 		}
 		Q := QuorumForHeight(height)
 		for keyOpKeyHash, keyOps := range blockKeyOps {
@@ -429,6 +435,10 @@ func OpenBlockFile(fileName string) (*Block, error) {
 		return nil, err
 	}
 	return &b, nil
+}
+
+func (b *Block) Close() error {
+	return b.db.Close()
 }
 
 // Returns an integer value from the _meta table within the block
