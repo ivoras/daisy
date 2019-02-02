@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-const p2pClientVersionString = "godaisy/0.1"
+const p2pClientVersionString = "godaisy/0.2"
 
 // Header for JSON messages we're sending
 type p2pMsgHeader struct {
