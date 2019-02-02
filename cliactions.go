@@ -141,7 +141,7 @@ func actionSignImportBlock(fn string) {
 func actionQuery(q string) {
 	log.Println("Running query:", q)
 	errCount := 0
-	for h := 1; h <= dbGetBlockchainHeight(); h++ {
+	for h := dbGetBlockchainHeight(); h > 0; h-- {
 		fn := blockchainGetFilename(h)
 		db, err := dbOpen(fn, true)
 		if err != nil {
