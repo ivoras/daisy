@@ -202,7 +202,7 @@ func blockchainVerifyEverything() error {
 		log.Println("Skipping blockchain consistency checks")
 		return nil
 	}
-	log.Println("Verifying all the blocks...")
+	log.Println("Verifying all the blocks (use --faster to skip)...")
 	maxHeight := dbGetBlockchainHeight()
 	for height := 0; height <= maxHeight; height++ {
 		if height > 0 && height%1000 == 0 {
