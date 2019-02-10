@@ -337,14 +337,14 @@ func actionNewChain(jsonFilename string) {
 	// Write the public key into the genesis block
 	pubKey, err := dbGetPublicKey(pubKeyHash)
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatalln("Error getting public key from db", err)
 	}
-	selfSig, err := cryptoSignHex(pKey, pubKeyHash)
+	selfSig, err := cryptoSignPublicKeyHash(pKey, pubKeyHash)
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatalln("Error signing publicKey", err)
 	}
 	_, err = db.Exec("INSERT INTO _keys (op, pubkey_hash, pubkey, sigkey_hash, signature) VALUES (?, ?, ?, ?, ?)",
-		"A", pubKeyHash, hex.EncodeToString(pubKey.publicKeyBytes), pubKeyHash, selfSig)
+		"A", pubKeyHash, hex.EncodeToString(pubKey.publicKeyBytes), pubKeyHash, hex.EncodeToString(selfSig))
 	if err != nil {
 		log.Fatalln("Error recording the genesis block public key")
 	}
