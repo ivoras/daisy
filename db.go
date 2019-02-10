@@ -49,14 +49,14 @@ CREATE INDEX blockchain_sigkey_hash ON blockchain(sigkey_hash);
 
 // DbPubKey is the convenience structure holding information from the pubkeys table
 type DbPubKey struct {
-	publicKeyHash  string
-	publicKeyBytes []byte
-	state          string
-	timeAdded      time.Time
-	isRevoked      bool
-	timeRevoked    time.Time
-	addBlockHeight int
-	metadata       map[string]string
+	publicKeyHash  string            `json:"pub_key_hash"`
+	publicKeyBytes []byte            `json:"pub_key"`
+	state          string            `json:"state"`
+	timeAdded      time.Time         `json:"time_added"`
+	isRevoked      bool              `json:"is_revoked"`
+	timeRevoked    time.Time         `json:"time_revoked"`
+	addBlockHeight int               `json:"block_height_added"`
+	metadata       map[string]string `json:"metadata"`
 }
 
 const pubKeysTableCreate = `
@@ -249,8 +249,8 @@ func dbWritePrivateKey(privkey []byte, hash string) {
 	}
 }
 
-// Returns a list of public keys corresponding to private keys in the system databases
-func dbGetMyPublicKeys() []string {
+// Returns a list of public keys hashes corresponding to private keys in the system databases
+func dbGetMyPublicKeyHashes() []string {
 	var result []string
 	rows, err := privateDb.Query("SELECT pubkey_hash FROM privkeys")
 	if err != nil {

@@ -472,7 +472,7 @@ func (b *Block) dbGetMetaHexBytes(key string) ([]byte, error) {
 func (b *Block) dbGetKeyOps() (map[string][]BlockKeyOp, error) {
 	var count int
 	if err := b.db.QueryRow("SELECT COUNT(*) FROM _keys").Scan(&count); err != nil {
-		log.Println("awww, shucks.")
+		log.Println("Error reading db _keys")
 		return nil, err
 	}
 	keyOps := make(map[string][]BlockKeyOp)
