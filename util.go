@@ -267,13 +267,22 @@ func (ss *StringSetWithExpiry) TestAndSet(s string) bool {
 	return ok
 }
 
-// Convert whatever to JSON
+// Convert whatever to a JSON string
 func jsonifyWhatever(i interface{}) string {
 	jsonb, err := json.Marshal(i)
 	if err != nil {
 		log.Panic(err)
 	}
 	return string(jsonb)
+}
+
+// Convert whatever to JSON bytes
+func jsonifyWhateverToBytes(i interface{}) []byte {
+	jsonb, err := json.Marshal(i)
+	if err != nil {
+		log.Panic(err)
+	}
+	return jsonb
 }
 
 // Splits an address string in the form of "host:port" into its separate host and port parts

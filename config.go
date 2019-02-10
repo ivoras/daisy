@@ -26,7 +26,7 @@ var cfg struct {
 	configFile     string
 	P2pPort        int    `json:"p2p_port"`
 	DataDir        string `json:"data_dir"`
-	httpPort       int
+	httpPort       int    `json:"http_port"`
 	showHelp       bool
 	faster         bool
 	p2pBlockInline bool

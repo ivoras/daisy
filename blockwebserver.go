@@ -34,9 +34,21 @@ func blockWebSendBlock(w http.ResponseWriter, r *http.Request) {
 	// log.Println("Done serving block", blockHeight)
 }
 
+func blockWebSendChainParams(w http.ResponseWriter, r *http.Request) {
+	log.Println("Serving chainparams.json to", r.RemoteAddr)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"chainparams.json\"")
+	_, err := w.Write(jsonifyWhateverToBytes(chainParams))
+	if err != nil {
+		log.Println(err)
+	}
+}
+
 func blockWebServer() {
 	r := mux.NewRouter()
 	r.HandleFunc("/block/{height}", blockWebSendBlock)
+	r.HandleFunc("/chainparams.json", blockWebSendChainParams)
 
 	serverAddress := fmt.Sprintf(":%d", cfg.httpPort)
 
