@@ -74,10 +74,10 @@ Talks / presentations I gave about Daisy:
 * This is a database-style blockchain. Daisy doesn't currently implement a cryptocurrency layer (though it would be simple to add this functionality), nor a smart contract layer (which is possible but not as simply). Since Daisy implements a design which is different from common cryptocurrency blockchains, those kinds of features would necessarily be implemented in a different way, with different semantics than what is common.
 * Everyone can download the blockchain, only special "miners" can create ones, in a sort-of web-of-trust way. Those nodes who are able to create new blocks are called "signatories." They are in posssion of an accepted private key.
 * Block payloads are SQLite database files. Except for a few special metadata tables, their content is not enforced.
-* Blockchain metadata is mostly separate from the block payloads, with some obvious exceptions such as the block hash. Metadata critical for blockchain integrity (like the previous block's hash (merkle)is within the block database)
+* Block metadata is mostly within the block database, with some obvious exceptions such as the block hash.
 * Consensus rules for accepting new blocks:
     * The validity of the SQLite files
-    * The presence of a special tables named `_meta` and `keys`,
+    * The presence of a special tables named `_meta` and `_keys`,
     * The validity of the previous block hash in the `_meta` table
     * The previous block hash is signed with a key which is one of the accepted private keys, i.e. signatories, i.e. which is present in the previous blocks' `_keys` table.
     * The `_keys` table contains new signatory keys additions and revocations. Both operations must be signed by a number of currently valid signatories, where the
