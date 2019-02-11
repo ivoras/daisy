@@ -5,9 +5,12 @@ Current status:
 * early alpha / nearly feature-complete wrt blockchain.
 * network / p2p code needs to be revamped, likely using an existing p2p library instead of rolling our own. Currently, Daisy can only work on machines with public IP addresses (no NAT handling at all).
 
-[Read Daisy's whitepaper here](https://docs.google.com/document/d/1YnFKQaXjTBPZ1e-x8tQ2oxddIoc0P-mfQ4hjUuuNzS4/edit?usp=sharing) to find out what it does and how to get started.
+Documentation and articles:
 
-[Read how to start custom / private Daisy blockchains here](https://steemit.com/blockchain/@ivoras/creating-a-custom-private-sql-blockchain-with-daisy).
+* [Read Daisy's whitepaper here](https://docs.google.com/document/d/1YnFKQaXjTBPZ1e-x8tQ2oxddIoc0P-mfQ4hjUuuNzS4/edit?usp=sharing) to find out what it does and how to get started.
+* [Read how to start custom / private Daisy blockchains here](https://steemit.com/blockchain/@ivoras/creating-a-custom-private-sql-blockchain-with-daisy).
+* [Demo project: putting Wikipedia on the blockchain](https://steemit.com/blockchain/@ivoras/putting-wikipedia-on-the-blockchain)
+* [How to use "daisy pull"](https://steemit.com/blockchain/@ivoras/blockchain-pull)
 
 # What if...
 
