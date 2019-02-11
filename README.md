@@ -58,8 +58,8 @@ Talks / presentations I gave about Daisy:
 
 ## ToDo
 
-* Add a `daisy pull` command similar to "docker pull" which would replicate a blockchain from an existing node
-* ✔ Add a [DHT](https://github.com/nictuku/dht) implementation for node discovery, possibly with some help from IPFS to store bootstrap nodes
+* ✔ Add a `daisy pull` command similar to "docker pull" which would replicate a blockchain from an existing node
+* Add a [DHT](https://github.com/nictuku/dht) implementation for node discovery, possibly with some help from IPFS to store bootstrap nodes
 * ✔ Make creating new blockchains from scratch possible without changing the code
 * Implement nicer error handling when replying to messages
 * Refactor db..., action... and blockchain... funcs into struct methods
