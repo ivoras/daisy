@@ -490,10 +490,14 @@ func actionPull(baseURL string) {
 				if err != nil {
 					log.Fatalln("Error decoding genesis block public key", kHash, err)
 				}
+				if chainParams.CreatorPublicKey != getPubKeyHash(op.publicKeyBytes) {
+					continue
+				}
 				if err = cryptoVerifyHex(pubKey, chainParams.GenesisBlockHash, chainParams.GenesisBlockHashSignature); err == nil {
 					verified = true
+					dbWritePublicKey(op.publicKeyBytes, chainParams.CreatorPublicKey, 0)
 				} else {
-					log.Println(err)
+					log.Fatalln("Error verifying genesis block signature", err)
 				}
 			}
 		}
@@ -502,6 +506,16 @@ func actionPull(baseURL string) {
 		log.Fatalln("Cannot verify genesis block signature")
 	}
 	blk.Close()
+
+	hashSignature, err := hex.DecodeString(chainParams.GenesisBlockHashSignature)
+	if err != nil {
+		log.Fatalln("Error hex-decoding hash signature", err)
+	}
+	blk.HashSignature = hashSignature
+	err = dbInsertBlock(blk.DbBlockchainBlock)
+	if err != nil {
+		log.Panic(err)
+	}
 
 	// Save the chainparams to the data dir
 	cpJSON, err := json.Marshal(chainParams)

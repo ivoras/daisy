@@ -25,7 +25,7 @@ var defaultChainParams = ChainParams{
 	ConsensusType:             ChainConsensusPoA,
 	GenesisBlockHash:          "9a0ff19183d1525a36de803047de4b73eb72506be8c81296eb463476a5c2d9e2",
 	GenesisBlockHashSignature: "30460221008b8b3b3cfee2493ef58f2f6a1f1768b564f4c9e9a341ad42912cbbcf5c3ec82f022100fbcdfd0258fa1a5b073d18f688c2fb3d8f9a7c59204c6777f2bbf1faeb1eb1ed",
-	GenesisBlockTimestamp:     "2017-05-06T10:38:50Z02:00",
+	GenesisBlockTimestamp:     "2017-05-06T10:38:50+02:00",
 }
 
 var chainParams = defaultChainParams
@@ -83,7 +83,7 @@ func ensureBlockchainSubdirectoryExists() {
 func blockchainInit(createDefault bool) {
 	ensureBlockchainSubdirectoryExists()
 	if dbGetBlockchainHeight() == -1 && createDefault {
-		log.Println("Noticing the existence of the Genesis block. Let there be light.")
+		log.Println("Writing down the default Genesis block. Let there be light.")
 
 		// This is basically testing the crypto code, no real purpose.
 		keypair, publicKeyHash, err := cryptoGetAPrivateKey()
@@ -143,7 +143,7 @@ func blockchainInit(createDefault bool) {
 		b.Height = 0
 		b.TimeAccepted, err = time.Parse(time.RFC3339, chainParams.GenesisBlockTimestamp)
 		if err != nil {
-			log.Panicln(err)
+			log.Panicln("Error parsing genesis block timestamp", err)
 		}
 		b.HashSignature, err = hex.DecodeString(chainParams.GenesisBlockHashSignature)
 		if err != nil {
@@ -188,10 +188,11 @@ func blockchainInit(createDefault bool) {
 		} else {
 			log.Println("Using default blockchain params")
 		}
+		log.Println("P2P peers:", dbGetSavedPeers())
 	}
 	err := blockchainVerifyEverything()
 	if err != nil {
-		log.Fatalf("verify: %v", err)
+		log.Fatalf("blockchainVerifyEverything: %v", err)
 	}
 }
 
@@ -238,6 +239,7 @@ func blockchainVerifyEverything() error {
 		}
 		err = cryptoVerifyBytes(creatorPublicKey, hashBytes, dbb.HashSignature)
 		if err != nil {
+			log.Println(creatorPublicKey, hashBytes, dbb.HashSignature)
 			return fmt.Errorf("block %d: block hash signature is invalid (%v)", height, err)
 		}
 		previousHashBytes, err := hex.DecodeString(dbb.PreviousBlockHash)
@@ -434,6 +436,9 @@ func OpenBlockFile(fileName string) (*Block, error) {
 	if b.PreviousBlockHashSignature, err = b.dbGetMetaHexBytes("PreviousBlockHashSignature"); err != nil {
 		return nil, err
 	}
+	if b.TimeAccepted, err = b.dbGetMetaTime("Timestamp"); err != nil {
+		return nil, err
+	}
 	return &b, nil
 }
 
@@ -448,6 +453,16 @@ func (b *Block) dbGetMetaInt(key string) (int, error) {
 		return -1, err
 	}
 	return strconv.Atoi(value)
+}
+
+// Returns a timestamp value from the _meta table within the block
+func (b *Block) dbGetMetaTime(key string) (time.Time, error) {
+	var value string
+	if err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value); err != nil {
+		return time.Time{}, err
+	}
+	t, err := time.Parse(time.RFC3339, value)
+	return t, err
 }
 
 // Returns a string value from the _meta table within the block
