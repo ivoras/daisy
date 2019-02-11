@@ -99,6 +99,11 @@ func actionSignImportBlock(fn string) {
 	if err != nil {
 		log.Fatalln(err)
 	}
+	err = dbSetMetaString(db, "Timestamp", time.Now().Format(time.RFC3339))
+	if err != nil {
+		log.Fatalln(err)
+	}
+
 	pkdb, err := dbGetPublicKey(publicKeyHash)
 	if err != nil {
 		log.Panic(err)
@@ -468,6 +473,7 @@ func actionPull(baseURL string) {
 
 	// Step 4: Initialise databases
 	dbInit()
+	dbClearSavedPeers()
 	cryptoInit()
 
 	blk, err := OpenBlockFile(blockFilename)

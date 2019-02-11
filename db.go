@@ -462,6 +462,11 @@ func dbInsertBlock(dbb *DbBlockchainBlock) error {
 	return err
 }
 
+func dbClearSavedPeers() error {
+	_, err := mainDb.Exec("DELETE FROM peers")
+	return err
+}
+
 // Gets a list of saved p2p peer addresses
 func dbGetSavedPeers() peerStringMap {
 	result := peerStringMap{}

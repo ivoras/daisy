@@ -678,7 +678,7 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 		defer resp.Body.Close()
 		blockFile, err = ioutil.TempFile("", "daisy")
 		if err != nil {
-			log.Println(err)
+			log.Println("Error creating temp file", err)
 			return
 		}
 		written, err := io.Copy(blockFile, resp.Body)
@@ -711,12 +711,12 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 
 	blk, err := OpenBlockFile(blockFile.Name())
 	if err != nil {
-		log.Println(p2pc.conn, err)
+		log.Println("Error opening block file", p2pc.conn, err)
 		return
 	}
 	blk.HashSignature, err = hex.DecodeString(hashSignature)
 	if err != nil {
-		log.Println(p2pc.conn, err)
+		log.Println("Error decoding hash signature", p2pc.conn, err)
 		return
 	}
 	height, err := checkAcceptBlock(blk)

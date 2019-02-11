@@ -437,7 +437,11 @@ func OpenBlockFile(fileName string) (*Block, error) {
 		return nil, err
 	}
 	if b.TimeAccepted, err = b.dbGetMetaTime("Timestamp"); err != nil {
-		return nil, err
+		st, err := os.Stat(fileName)
+		if err != nil {
+			return nil, err
+		}
+		b.TimeAccepted = st.ModTime()
 	}
 	return &b, nil
 }
