@@ -27,7 +27,7 @@ func blockWebSendBlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Println("Serving block", blockHeight, "to", r.RemoteAddr)
+	log.Println("HTTP serving block", blockHeight, "to", r.RemoteAddr)
 	w.Header().Set("Content-Type", "application/x-sqlite3")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%08x.db\"", blockHeight))
 	http.ServeFile(w, r, blockFilename)
@@ -35,7 +35,7 @@ func blockWebSendBlock(w http.ResponseWriter, r *http.Request) {
 }
 
 func blockWebSendChainParams(w http.ResponseWriter, r *http.Request) {
-	log.Println("Serving chainparams.json to", r.RemoteAddr)
+	log.Println("HTTP serving chainparams.json to", r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", "attachment; filename=\"chainparams.json\"")
