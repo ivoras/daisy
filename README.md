@@ -12,6 +12,8 @@ Documentation and articles:
 * [Demo project: putting Wikipedia on the blockchain](https://steemit.com/blockchain/@ivoras/putting-wikipedia-on-the-blockchain)
 * [How to use "daisy pull"](https://steemit.com/blockchain/@ivoras/blockchain-pull)
 
+Private hybrid blockchain & SQL database software usable for distributed data collection, data storage and data distribution. Daisy combines the specific benefits of the blockchain: distributed data collection and data immutability through cryptographic signatures of blocks, with the convenience of SQL databases, which means businesses can more easily adopt it in their existing environments.
+
 # What if...
 
 What if there is a blockchain where only certain nodes, in possession of one of accepted private keys, can add data (i.e. new blocks) to a blockchain, whose blocks are (SQLite) databases, and where those existing nodes can accept new ones into their ranks by signing the candidate's keys in a web-of-trust style?
