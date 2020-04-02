@@ -34,7 +34,9 @@ const chainParamsBaseName = "chainparams.json"
 
 // Blocks (SQLite databases) are stored as flat files in a directory
 const blockchainSubdirectoryBaseName = "blocks"
-const blockFilenameFormat = "%s/block_%08x.db"
+const rawBlockFilenameFormat = "%s/%04x/block_%08x.db"
+const rawBlockDirnameFormat = "%s/%04x"
+const genesisBlockHeight = 0
 
 var blockchainSubdirectory string
 
@@ -131,7 +133,10 @@ func blockchainInit(createDefault bool) {
 			log.Println(hex.EncodeToString(signature))
 		*/
 
-		genesisBlockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, 0)
+		if err := blockchainEnsureBlockDir(genesisBlockHeight); err != nil {
+			log.Panicln(err)
+		}
+		genesisBlockFilename := blockchainGetFilename(genesisBlockHeight)
 		err = ioutil.WriteFile(genesisBlockFilename, genesisBlock, 0644)
 		if err != nil {
 			log.Panic(err)
@@ -209,7 +214,10 @@ func blockchainVerifyEverything() error {
 		if height > 0 && height%1000 == 0 {
 			log.Println("Verifying block", height)
 		}
-		blockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, height)
+		if err := blockchainEnsureBlockDir(height); err != nil {
+			return err
+		}
+		blockFilename := blockchainGetFilename(height)
 		fileHash, err := hashFileToHexString(blockFilename)
 		if err != nil {
 			return fmt.Errorf("block %d: %v", height, err)
@@ -386,13 +394,21 @@ func QuorumForHeight(h int) int {
 
 // Formats the block height into a blockchain file (SQLite database) filename
 func blockchainGetFilename(h int) string {
-	return fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, h)
+	return fmt.Sprintf(rawBlockFilenameFormat, blockchainSubdirectory, h/65536, h)
+}
+
+func blockchainEnsureBlockDir(h int) error {
+	dirName := fmt.Sprintf(rawBlockDirnameFormat, blockchainSubdirectory, h/65536)
+	return os.MkdirAll(dirName, 0755)
 }
 
 // OpenBlockByHeight opens a block stored in the blockchain at the given height
 func OpenBlockByHeight(height int) (*Block, error) {
 	b := Block{DbBlockchainBlock: &DbBlockchainBlock{Height: height}}
-	blockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, height)
+	if err := blockchainEnsureBlockDir(height); err != nil {
+		return nil, err
+	}
+	blockFilename := blockchainGetFilename(height)
 	hash, err := hashFileToHexString(blockFilename)
 	if err != nil {
 		return nil, err
@@ -573,7 +589,10 @@ func dbSetMetaInt(db *sql.DB, key string, value int) error {
 
 // Copies a given file to the blockchain directory and names it as a block with the given height
 func blockchainCopyFile(fn string, height int) error {
-	blockFilename := fmt.Sprintf(blockFilenameFormat, blockchainSubdirectory, height)
+	if err := blockchainEnsureBlockDir(height); err != nil {
+		return err
+	}
+	blockFilename := blockchainGetFilename(height)
 	in, err := os.Open(fn)
 	if err != nil {
 		return err
