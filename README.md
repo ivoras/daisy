@@ -24,7 +24,7 @@ What if all this doesn't involve just one global blockchain instance but instead
 
 ## Intended uses
 
-Some possible use cases I've thought of for blockchains where everyone can download and verify the data, but only a few parties can publish:
+Some possible use cases I've thought of for blockchains where everyone can download and verify the data, but only a few parties can publish (which is the model Daisy implements):
 
 * Distributing academic articles: create a new blockchain for academic institutions (and Arxiv and such) and allow them to push blocks with articles into the blockchain.
 * Distributing municipal and governmental records: each institution / agency could be allowed to publish blocks with records and documents into the blockchain.
@@ -38,9 +38,21 @@ Some possible use cases I've thought of for blockchains where everyone can downl
 
 The blockchain is basically very well suited to data exchange between otherwise competitive or hostile parties - the "trustless" principle is how Bitcoin manages to work in a really hostile global environment. Daisy could help bridge such environments.
 
+## Roadmap
+
+* ✔ Add a `daisy pull` command similar to "docker pull" which would replicate a blockchain from an existing node
+* ✔ Make creating new blockchains from scratch possible without changing the code
+* ✔ Implement the "URL" encoding for block transfers: so the data in the JSON messages isn't block data, but an URL to the block data.
+* Implement nicer error handling when replying to messages
+* Refactor db..., action... and blockchain... funcs into struct methods
+* Reimplement P2P as a WebSockets protocol, allowing HTTP REST APIs such as getblock to be served from the same port.
+* Add a [DHT](https://github.com/nictuku/dht) implementation for node discovery, possibly with some help from IPFS to store bootstrap nodes
+* Implement a Bloom filter for tables in SQL queries, to skip querying blocks which don't have the appropriate tables.
+* Implement stochastic guarded block importing: if there apparently is a new block in the network: ask a number of peers if they've seen it before importing it.
+
 # Usage
 
-When the command line app is started, Daisy will initialise its databases and install the default (and currently the only one) blockchain. It will then connect to a list of peers it maintains and fetch new blocks, if any.
+When the command line app is started, Daisy will initialise its databases and install the default blockchain. It will then connect to a list of peers it maintains and fetch new blocks, if any.
 
 ## Querying the blockchain
 
@@ -62,18 +74,6 @@ Talks / presentations I gave about Daisy:
 
 * at a local Gophers meetup, September 2017: https://docs.google.com/presentation/d/1RybQluA3SbrM0PMgxmUSTWxyESTcXL9eFLSUvexDQSI/edit?usp=sharing
 * at FSEC, September 2017: https://docs.google.com/presentation/d/10lqfxQvRCOco4pxbVjZUyiClqyyCOdN1L3RhGYZbtdM/edit?usp=sharing
-
-## ToDo
-
-* ✔ Add a `daisy pull` command similar to "docker pull" which would replicate a blockchain from an existing node
-* ✔ Make creating new blockchains from scratch possible without changing the code
-* ✔ Implement the "URL" encoding for block transfers: so the data in the JSON messages isn't block data, but an URL to the block data.
-* Implement nicer error handling when replying to messages
-* Refactor db..., action... and blockchain... funcs into struct methods
-* Reimplement P2P as a WebSockets protocol, allowing HTTP REST APIs such as getblock to be served from the same port.
-* Add a [DHT](https://github.com/nictuku/dht) implementation for node discovery, possibly with some help from IPFS to store bootstrap nodes
-* Implement a Bloom filter for tables in SQL queries, to skip querying blocks which don't have the appropriate tables.
-* Implement stochastic guarded block importing: if there apparently is a new block in the network: ask a number of peers if they've seen it before importing it.
 
 ## Design notes
 
