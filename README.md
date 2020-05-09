@@ -20,19 +20,7 @@ What if there is a blockchain where only certain nodes, in possession of one of 
 
 What if public (government) documents were distributed in this way...? What if Wikipedia was...?
 
-# Usage
-
-When started, Daisy will initialise its databases and install the default (and currently the only one) blockchain. It will then connect to a list of peers it maintains and fetch new blocks, if any.
-
-## Querying the blockchain
-
-All the blocks in the blockchain can be queried at the same time by using a command such as `./daisy query "SELECT COUNT(*) FROM wikinews_titles"` (note the quotes!). This will iterate over all the blocks, and in those blocks where the query is successful, will output the results to stdout as JSON objects separated by newlines. Of course, this is limited to read-only queries.
-
-## Adding data to the blockchain
-
-Since this is a private blockchain, not everyone has the ability to create new blocks. I'm thinking of this as a more of a framework for creating new blockchains. If you want to contribute to the default blockchain (i.e. store data, i.e. add new sqlite databases to the blockchain), run the `./daisy mykeys` command, send me the public key hash to sign, and an explanation / introductory letter saying why and what do you want to do with it, and I'll sign your key and accept it into the blockchain as one of the signatories.
-
-When you have a private key whose public part is added to the list of signatories, running `./daisy signimportblock mydata.db` will import the mydata.db file into the blockchain. Before it's imported, the database is modified to contain the Daisy metadata tables.
+What if all this doesn't involve just one global blockchain instance but instead is implemented by software which enables multiple blockchains to be instantiated as easily as new Git repos, and just as easily distributed?
 
 ## Intended uses
 
@@ -49,6 +37,20 @@ Some possible use cases I've thought of for blockchains where everyone can downl
 * Logging and auditing: create and ship signed, rich logs which can be easily distributed and audited (e.g. each department publishes blocks of their changes).
 
 The blockchain is basically very well suited to data exchange between otherwise competitive or hostile parties - the "trustless" principle is how Bitcoin manages to work in a really hostile global environment. Daisy could help bridge such environments.
+
+# Usage
+
+When the command line app is started, Daisy will initialise its databases and install the default (and currently the only one) blockchain. It will then connect to a list of peers it maintains and fetch new blocks, if any.
+
+## Querying the blockchain
+
+All the blocks in the blockchain can be queried at the same time by using a command such as `./daisy query "SELECT COUNT(*) FROM wikinews_titles"` (note the quotes!). This will iterate over all the blocks, and in those blocks where the query is successful, will output the results to stdout as JSON objects separated by newlines. Of course, this is limited to read-only queries.
+
+## Adding data to the blockchain
+
+Since this is a private blockchain, not everyone has the ability to create new blocks. I'm thinking of this as a more of a framework for creating new single-purpose blockchain instances. If you want to contribute to the default blockchain (i.e. store data, i.e. add new sqlite databases to the blockchain), run the `./daisy mykeys` command, send me the public key hash to sign, and an explanation / introductory letter saying why and what do you want to do with it, and I'll sign your key and accept it into the blockchain as one of the signatories.
+
+When you have a private key whose public part is added to the list of signatories, running `./daisy signimportblock mydata.db` will import the mydata.db file into the blockchain. Before it's imported, the database is modified to contain the Daisy metadata tables.
 
 # Current status
 
