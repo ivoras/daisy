@@ -1,8 +1,7 @@
-package main
+package daisy
 
 import (
 	"log"
-	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,8 +19,8 @@ type sysEventMessage struct {
 // Passes messages such as eventQuit
 var sysEventChannel = make(chan sysEventMessage, 5)
 
-func main() {
-	rand.Seed(p2pEphemeralID + getNowUTC()) // Initialise weak RNG with strong RNG
+// Main is the entry point of the Daisy node and command line tool.
+func Main() {
 	log.Println("Starting up", p2pClientVersionString, "...")
 	sigChannel := make(chan os.Signal, 1)
 	signal.Notify(sigChannel, syscall.SIGINT, syscall.SIGTERM)
@@ -61,5 +60,4 @@ func main() {
 			}
 		}
 	}
-
 }

@@ -1,4 +1,4 @@
-package main
+package daisy
 
 import (
 	"database/sql"
@@ -6,12 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/ivoras/daisy/internal/assets"
+	"github.com/ivoras/daisy/internal/dcrypto"
+	"github.com/ivoras/daisy/internal/util"
 )
 
 // CurrentBlockVersion is the version of the block metadata
@@ -34,8 +38,8 @@ const chainParamsBaseName = "chainparams.json"
 
 // Blocks (SQLite databases) are stored as flat files in a directory
 const blockchainSubdirectoryBaseName = "blocks"
-const rawBlockFilenameFormat = "%s/%04x/block_%08x.db"
-const rawBlockDirnameFormat = "%s/%04x"
+const rawBlockFilenameFormat = "block_%08x.db"
+const rawBlockDirnameFormat = "%04x"
 const genesisBlockHeight = 0
 
 var blockchainSubdirectory string
@@ -70,7 +74,7 @@ type BlockKeyOp struct {
 }
 
 func ensureBlockchainSubdirectoryExists() {
-	blockchainSubdirectory = fmt.Sprintf("%s/%s", cfg.DataDir, blockchainSubdirectoryBaseName)
+	blockchainSubdirectory = filepath.Join(cfg.DataDir, blockchainSubdirectoryBaseName)
 	if _, err := os.Stat(blockchainSubdirectory); err != nil {
 		// Probably doesn't exist, create it
 		log.Println("Creating directory", blockchainSubdirectory)
@@ -92,11 +96,11 @@ func blockchainInit(createDefault bool) {
 		if err != nil {
 			log.Panicln(err)
 		}
-		signature, err := cryptoSignPublicKeyHash(keypair, publicKeyHash)
+		signature, err := dcrypto.SignPublicKeyHash(keypair, publicKeyHash)
 		if err != nil {
 			log.Panicln(err)
 		}
-		if err = cryptoVerifyPublicKeyHashSignature(&keypair.PublicKey, publicKeyHash, signature); err != nil {
+		if err = dcrypto.VerifyPublicKeyHashSignature(&keypair.PublicKey, publicKeyHash, signature); err != nil {
 			log.Panicln(err)
 		}
 
@@ -106,7 +110,7 @@ func blockchainInit(createDefault bool) {
 			if err != nil {
 				log.Panicln(err)
 			}
-			signature, err = cryptoSignBytes(keypair, genesisPrevBlockHash)
+			signature, err = dcrypto.SignBytes(keypair, genesisPrevBlockHash)
 			if err != nil {
 				log.Panicln(err)
 			}
@@ -115,9 +119,9 @@ func blockchainInit(createDefault bool) {
 		*/
 
 		// Bring the genesis block into existence
-		genesisBlock := MustAsset("bindata/genesis.db")
-		if hashBytesToHexString(genesisBlock) != chainParams.GenesisBlockHash {
-			log.Panicln("Genesis block hash unexpected:", hashBytesToHexString(genesisBlock))
+		genesisBlock := assets.GenesisDB
+		if util.HashBytesToHexString(genesisBlock) != chainParams.GenesisBlockHash {
+			log.Panicln("Genesis block hash unexpected:", util.HashBytesToHexString(genesisBlock))
 		}
 
 		/*
@@ -126,7 +130,7 @@ func blockchainInit(createDefault bool) {
 			if err != nil {
 				log.Panicln(err)
 			}
-			signature, err = cryptoSignBytes(keypair, genesisBlockHash)
+			signature, err = dcrypto.SignBytes(keypair, genesisBlockHash)
 			if err != nil {
 				log.Panicln(err)
 			}
@@ -137,7 +141,7 @@ func blockchainInit(createDefault bool) {
 			log.Panicln(err)
 		}
 		genesisBlockFilename := blockchainGetFilename(genesisBlockHeight)
-		err = ioutil.WriteFile(genesisBlockFilename, genesisBlock, 0644)
+		err = os.WriteFile(genesisBlockFilename, genesisBlock, 0644)
 		if err != nil {
 			log.Panic(err)
 		}
@@ -172,10 +176,10 @@ func blockchainInit(createDefault bool) {
 		}
 	} else {
 		// The chainparams file will only exist for non-default blockchains
-		cpFilename := fmt.Sprintf("%s/%s", cfg.DataDir, chainParamsBaseName)
-		if fileExists(cpFilename) {
+		cpFilename := filepath.Join(cfg.DataDir, chainParamsBaseName)
+		if util.FileExists(cpFilename) {
 			log.Println("Loading custom blockchain params from", cpFilename)
-			cpJSON, err := ioutil.ReadFile(cpFilename)
+			cpJSON, err := os.ReadFile(cpFilename)
 			if err != nil {
 				log.Fatal("Error reading chainparams file", cpFilename, err)
 			}
@@ -218,7 +222,7 @@ func blockchainVerifyEverything() error {
 			return err
 		}
 		blockFilename := blockchainGetFilename(height)
-		fileHash, err := hashFileToHexString(blockFilename)
+		fileHash, err := util.HashFileToHexString(blockFilename)
 		if err != nil {
 			return fmt.Errorf("block %d: %v", height, err)
 		}
@@ -237,7 +241,7 @@ func blockchainVerifyEverything() error {
 		if err != nil {
 			return fmt.Errorf("block %d: error getting public key %s", height, dbb.SignaturePublicKeyHash)
 		}
-		creatorPublicKey, err := cryptoDecodePublicKeyBytes(dbpk.publicKeyBytes)
+		creatorPublicKey, err := dcrypto.DecodePublicKeyBytes(dbpk.publicKeyBytes)
 		if err != nil {
 			return fmt.Errorf("block %d: cannot decode public key %s", height, dbb.SignaturePublicKeyHash)
 		}
@@ -245,7 +249,7 @@ func blockchainVerifyEverything() error {
 		if err != nil {
 			return fmt.Errorf("block %d: cannot decode hash %s", height, dbb.Hash)
 		}
-		err = cryptoVerifyBytes(creatorPublicKey, hashBytes, dbb.HashSignature)
+		err = dcrypto.VerifyBytes(creatorPublicKey, hashBytes, dbb.HashSignature)
 		if err != nil {
 			log.Println(creatorPublicKey, hashBytes, dbb.HashSignature)
 			return fmt.Errorf("block %d: block hash signature is invalid (%v)", height, err)
@@ -254,7 +258,7 @@ func blockchainVerifyEverything() error {
 		if err != nil {
 			return fmt.Errorf("block %d: cannot decode previous block hash %s", height, dbb.PreviousBlockHash)
 		}
-		err = cryptoVerifyBytes(creatorPublicKey, previousHashBytes, dbb.PreviousBlockHashSignature)
+		err = dcrypto.VerifyBytes(creatorPublicKey, previousHashBytes, dbb.PreviousBlockHashSignature)
 		if err != nil {
 			return fmt.Errorf("block %d: previous block hash signature is invalid (%v)", height, err)
 		}
@@ -288,11 +292,11 @@ func blockchainVerifyEverything() error {
 				if err != nil {
 					return fmt.Errorf("block %d: cannot get public key %s from main db", height, kop.signatureKeyHash)
 				}
-				signingKey, err := cryptoDecodePublicKeyBytes(dbSigningKey.publicKeyBytes)
+				signingKey, err := dcrypto.DecodePublicKeyBytes(dbSigningKey.publicKeyBytes)
 				if err != nil {
 					return fmt.Errorf("block %d: cannot decode public key %s", height, dbSigningKey.publicKeyHash)
 				}
-				if err = cryptoVerifyPublicKeyHashSignature(signingKey, kop.publicKeyHash, kop.signature); err != nil {
+				if err = dcrypto.VerifyPublicKeyHashSignature(signingKey, kop.publicKeyHash, kop.signature); err != nil {
 					return fmt.Errorf("block %d: key op signature invalid for signer %s: %v", height, kop.signatureKeyHash, err)
 				}
 			}
@@ -323,15 +327,15 @@ func checkAcceptBlock(blk *Block) (int, error) {
 	if signatoryPubKey.isRevoked {
 		return 0, fmt.Errorf("The public key %s signing the block is revoked on %v", blk.SignaturePublicKeyHash, signatoryPubKey.timeRevoked)
 	}
-	sigPubKey, err := cryptoDecodePublicKeyBytes(signatoryPubKey.publicKeyBytes)
+	sigPubKey, err := dcrypto.DecodePublicKeyBytes(signatoryPubKey.publicKeyBytes)
 	if err != nil {
 		return 0, fmt.Errorf("Cannot decode public key %s: %v", blk.SignaturePublicKeyHash, err)
 	}
-	err = cryptoVerifyHexBytes(sigPubKey, blk.PreviousBlockHash, blk.PreviousBlockHashSignature)
+	err = dcrypto.VerifyHexBytes(sigPubKey, blk.PreviousBlockHash, blk.PreviousBlockHashSignature)
 	if err != nil {
 		return 0, fmt.Errorf("Verification of previous block hash has failed: %v", err)
 	}
-	err = cryptoVerifyHexBytes(sigPubKey, blk.Hash, blk.HashSignature)
+	err = dcrypto.VerifyHexBytes(sigPubKey, blk.Hash, blk.HashSignature)
 	if err != nil {
 		return 0, fmt.Errorf("Verification of block hash has failed: %v", err)
 	}
@@ -349,11 +353,11 @@ func checkAcceptBlock(blk *Block) (int, error) {
 			if err != nil {
 				return 0, fmt.Errorf("Error retrieving supposedly key op signatory %s", keyOp.signatureKeyHash)
 			}
-			sigPubKey, err := cryptoDecodePublicKeyBytes(signatoryPubKey.publicKeyBytes)
+			sigPubKey, err := dcrypto.DecodePublicKeyBytes(signatoryPubKey.publicKeyBytes)
 			if err != nil {
 				return 0, fmt.Errorf("Cannot decode public key %s: %v", signatoryPubKey.publicKeyHash, err)
 			}
-			err = cryptoVerifyPublicKeyHashSignature(sigPubKey, key, keyOp.signature)
+			err = dcrypto.VerifyPublicKeyHashSignature(sigPubKey, key, keyOp.signature)
 			if err != nil {
 				return 0, fmt.Errorf("Failed verification of key op for %s by %s", key, keyOp.signatureKeyHash)
 			}
@@ -392,13 +396,18 @@ func QuorumForHeight(h int) int {
 	return int(math.Log(float64(h)) * 2)
 }
 
+// Returns the (sharded) directory which holds the block with the given height: 64k blocks per directory
+func blockchainDirname(h int) string {
+	return filepath.Join(blockchainSubdirectory, fmt.Sprintf(rawBlockDirnameFormat, h/65536))
+}
+
 // Formats the block height into a blockchain file (SQLite database) filename
 func blockchainGetFilename(h int) string {
-	return fmt.Sprintf(rawBlockFilenameFormat, blockchainSubdirectory, h/65536, h)
+	return filepath.Join(blockchainDirname(h), fmt.Sprintf(rawBlockFilenameFormat, h))
 }
 
 func blockchainEnsureBlockDir(h int) error {
-	dirName := fmt.Sprintf(rawBlockDirnameFormat, blockchainSubdirectory, h/65536)
+	dirName := blockchainDirname(h)
 	return os.MkdirAll(dirName, 0755)
 }
 
@@ -409,7 +418,7 @@ func OpenBlockByHeight(height int) (*Block, error) {
 		return nil, err
 	}
 	blockFilename := blockchainGetFilename(height)
-	hash, err := hashFileToHexString(blockFilename)
+	hash, err := util.HashFileToHexString(blockFilename)
 	if err != nil {
 		return nil, err
 	}
@@ -431,7 +440,7 @@ func OpenBlockByHeight(height int) (*Block, error) {
 // OpenBlockFile reads block metadata from the given database file.
 // Note that it will not fill-in all the fields. Notable, height is not stored in the block db's metadata.
 func OpenBlockFile(fileName string) (*Block, error) {
-	hash, err := hashFileToHexString(fileName)
+	hash, err := util.HashFileToHexString(fileName)
 	if err != nil {
 		return nil, err
 	}
@@ -527,11 +536,11 @@ func (b *Block) dbGetKeyOps() (map[string][]BlockKeyOp, error) {
 		if keyOp.publicKeyBytes, err = hex.DecodeString(publicKeyHex); err != nil {
 			return nil, err
 		}
-		publicKey, err := cryptoDecodePublicKeyBytes(keyOp.publicKeyBytes)
+		publicKey, err := dcrypto.DecodePublicKeyBytes(keyOp.publicKeyBytes)
 		if err != nil {
 			return nil, err
 		}
-		if keyOp.publicKeyHash != cryptoMustGetPublicKeyHash(publicKey) {
+		if keyOp.publicKeyHash != dcrypto.MustPublicKeyHash(publicKey) {
 			return nil, fmt.Errorf("Public key hash doesn't match for %s", keyOp.publicKeyHash)
 		}
 		if keyOp.signature, err = hex.DecodeString(signatureHex); err != nil {

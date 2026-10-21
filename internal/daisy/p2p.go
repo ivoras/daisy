@@ -1,4 +1,4 @@
-package main
+package daisy
 
 import (
 	"bufio"
@@ -10,14 +10,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"os"
-	"sort"
+	"slices"
 	"strconv"
 	"time"
+
+	"github.com/ivoras/daisy/internal/util"
 )
 
 const p2pClientVersionString = "godaisy/0.2"
@@ -97,14 +98,14 @@ type p2pConnection struct {
 	testedConnectable bool // using the default port
 	chainHeight       int
 	refreshTime       time.Time
-	chanToPeer        chan interface{} // structs go out
-	chanFromPeer      chan StrIfMap    // StrIfMaps go in
+	chanToPeer        chan any           // structs go out
+	chanFromPeer      chan util.StrIfMap // StrIfMaps go in
 }
 
 // A set of p2p connections
 type p2pPeersSet struct {
 	peers map[*p2pConnection]time.Time
-	lock  WithMutex // Warning: do not do any IO/network operations while holding this lock
+	lock  util.WithMutex // Warning: do not do any IO/network operations while holding this lock
 }
 
 // The global set of p2p connections. XXX: Singletons in Go?
@@ -158,7 +159,7 @@ func (p *p2pPeersSet) tryPeersConnectable() {
 			if peer.testedConnectable || peer.isConnectable {
 				continue
 			}
-			host, port, err := splitAddress(peer.address)
+			host, port, err := util.SplitAddress(peer.address)
 			if err != nil {
 				continue
 			}
@@ -196,14 +197,14 @@ func (p *p2pPeersSet) tryPeersConnectable() {
 
 func (p *p2pPeersSet) saveConnectablePeers() {
 	dbPeers := dbGetSavedPeers()
-	localAddresses := getLocalAddresses()
+	localAddresses := util.LocalAddresses()
 
 	p.lock.With(func() {
 		for peer := range p.peers {
 			if !peer.isConnectable {
 				continue
 			}
-			host, _, err := splitAddress(peer.address)
+			host, _, err := util.SplitAddress(peer.address)
 			if err != nil {
 				continue
 			}
@@ -216,7 +217,7 @@ func (p *p2pPeersSet) saveConnectablePeers() {
 				// Already in db
 				continue
 			}
-			if inStrings(addr.String(), localAddresses) {
+			if slices.Contains(localAddresses, addr.String()) {
 				// Local interface
 				continue
 			}
@@ -265,7 +266,7 @@ func p2pClient() {
 	p2pCoordinator.connectDbPeers()
 }
 
-func (p2pc *p2pConnection) sendMsg(msg interface{}) error {
+func (p2pc *p2pConnection) sendMsg(msg any) error {
 	bmsg, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -311,11 +312,9 @@ func (p2pc *p2pConnection) handleConnection() {
 	// XXX: the state machine shouldn't start by the listener sending something
 	// (security best practices)
 	helloMsg := p2pMsgHelloStruct{
-		p2pMsgHeader: p2pMsgHeader{
-			P2pID: p2pEphemeralID,
-			Root:  chainParams.GenesisBlockHash,
-			Msg:   p2pMsgHello,
-		},
+		P2pID:       p2pEphemeralID,
+		Root:        chainParams.GenesisBlockHash,
+		Msg:         p2pMsgHello,
 		Version:     p2pClientVersionString,
 		ChainHeight: dbGetBlockchainHeight(),
 		MyPeers:     p2pPeers.GetAddresses(true),
@@ -334,21 +333,21 @@ func (p2pc *p2pConnection) handleConnection() {
 			line, err = p2pc.peer.ReadBytes('\n')
 			if err != nil {
 				log.Println("Error reading data from", p2pc.address, err)
-				p2pc.chanFromPeer <- StrIfMap{"_error": "Error reading data"}
+				p2pc.chanFromPeer <- util.StrIfMap{"_error": "Error reading data"}
 				break
 			}
-			var msg StrIfMap
+			var msg util.StrIfMap
 			err = json.Unmarshal(line, &msg)
 			if err != nil {
 				log.Println("Cannot parse JSON", strconv.QuoteToASCII(string(line)), "from", p2pc.address)
-				p2pc.chanFromPeer <- StrIfMap{"_error": "Cannot parse JSON"}
+				p2pc.chanFromPeer <- util.StrIfMap{"_error": "Cannot parse JSON"}
 				break
 			}
 
 			var root string
 			if root, err = msg.GetString("root"); err != nil {
 				log.Printf("Problem with chain root from  %v: %v", p2pc.address, err)
-				p2pc.chanFromPeer <- StrIfMap{"_error": "Problem with chain root"}
+				p2pc.chanFromPeer <- util.StrIfMap{"_error": "Problem with chain root"}
 				break
 			}
 			if root != chainParams.GenesisBlockHash {
@@ -367,7 +366,7 @@ func (p2pc *p2pConnection) handleConnection() {
 	for !exit {
 		select {
 		case msg := <-p2pc.chanFromPeer:
-			// log.Printf("... chainFromPeer: %s: %s", p2pc.address, jsonifyWhatever(msg))
+			// log.Printf("... chainFromPeer: %s: %s", p2pc.address, util.JSONify(msg))
 			var _error string
 			if _error, err = msg.GetString("_error"); err == nil {
 				log.Printf("Fatal error from %v: %v", p2pc.address, _error)
@@ -406,7 +405,7 @@ func (p2pc *p2pConnection) handleConnection() {
 	// The connection has been dismissed
 }
 
-func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
+func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
 	var ver string
 	var err error
 	if ver, err = msg.GetString("version"); err != nil {
@@ -458,7 +457,7 @@ func (p2pc *p2pConnection) handleMsgHello(msg StrIfMap) {
 }
 
 // Handle getblockhashes
-func (p2pc *p2pConnection) handleGetBlockHashes(msg StrIfMap) {
+func (p2pc *p2pConnection) handleGetBlockHashes(msg util.StrIfMap) {
 	var minBlockHeight int
 	var maxBlockHeight int
 	var err error
@@ -472,18 +471,16 @@ func (p2pc *p2pConnection) handleGetBlockHashes(msg StrIfMap) {
 	}
 	log.Printf("*** Sending block hashes from %d to %d to %s", minBlockHeight, maxBlockHeight, p2pc.address)
 	respMsg := p2pMsgBlockHashesStruct{
-		p2pMsgHeader: p2pMsgHeader{
-			P2pID: p2pEphemeralID,
-			Root:  chainParams.GenesisBlockHash,
-			Msg:   p2pMsgBlockHashes,
-		},
+		P2pID:  p2pEphemeralID,
+		Root:   chainParams.GenesisBlockHash,
+		Msg:    p2pMsgBlockHashes,
 		Hashes: dbGetHeightHashes(minBlockHeight, maxBlockHeight),
 	}
 	p2pc.chanToPeer <- respMsg
 }
 
 // Handle receiving blockhashes
-func (p2pc *p2pConnection) handleBlockHashes(msg StrIfMap) {
+func (p2pc *p2pConnection) handleBlockHashes(msg util.StrIfMap) {
 	var hashes map[int]string
 	var err error
 	if hashes, err = msg.GetIntStringMap("hashes"); err != nil {
@@ -496,8 +493,8 @@ func (p2pc *p2pConnection) handleBlockHashes(msg StrIfMap) {
 		heights[n] = h
 		n++
 	}
-	sort.Ints(heights)
-	log.Println("handleBlockHashes: got", jsonifyWhatever(heights))
+	slices.Sort(heights)
+	log.Println("handleBlockHashes: got", util.JSONify(heights))
 	for _, h := range heights {
 		if dbBlockHeightExists(h) {
 			log.Println("handleBlockHashes: already have block:", h)
@@ -512,19 +509,17 @@ func (p2pc *p2pConnection) handleBlockHashes(msg StrIfMap) {
 		}
 		log.Println("Requesting block", hashes[h])
 		msg := p2pMsgGetBlockStruct{
-			p2pMsgHeader: p2pMsgHeader{
-				P2pID: p2pEphemeralID,
-				Root:  chainParams.GenesisBlockHash,
-				Msg:   p2pMsgGetBlock,
-			},
-			Hash: hashes[h],
+			P2pID: p2pEphemeralID,
+			Root:  chainParams.GenesisBlockHash,
+			Msg:   p2pMsgGetBlock,
+			Hash:  hashes[h],
 		}
 		p2pc.chanToPeer <- msg
 	}
 }
 
 // getblock: a request to transfer a block
-func (p2pc *p2pConnection) handleGetBlock(msg StrIfMap) {
+func (p2pc *p2pConnection) handleGetBlock(msg util.StrIfMap) {
 	hash, err := msg.GetString("hash")
 	if err != nil {
 		log.Println(p2pc.conn, err)
@@ -576,16 +571,14 @@ func (p2pc *p2pConnection) handleGetBlock(msg StrIfMap) {
 		msgBlockData = base64.StdEncoding.EncodeToString(zbuf.Bytes())
 	} else {
 		msgBlockEncoding = "http"
-		msgBlockData = fmt.Sprintf("http://%s:%d/block/%d", getLocalAddresses()[0], cfg.httpPort, dbb.Height)
+		msgBlockData = fmt.Sprintf("http://%s:%d/block/%d", util.LocalAddresses()[0], cfg.httpPort, dbb.Height)
 		log.Println("*** Instructing the peer to get a block from", msgBlockData)
 	}
 
 	respMsg := p2pMsgBlockStruct{
-		p2pMsgHeader: p2pMsgHeader{
-			P2pID: p2pEphemeralID,
-			Root:  chainParams.GenesisBlockHash,
-			Msg:   p2pMsgBlock,
-		},
+		P2pID:         p2pEphemeralID,
+		Root:          chainParams.GenesisBlockHash,
+		Msg:           p2pMsgBlock,
 		Hash:          hash,
 		HashSignature: hex.EncodeToString(dbb.HashSignature),
 		Encoding:      msgBlockEncoding,
@@ -597,7 +590,7 @@ func (p2pc *p2pConnection) handleGetBlock(msg StrIfMap) {
 }
 
 // block: A block is received
-func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
+func (p2pc *p2pConnection) handleBlock(msg util.StrIfMap) {
 	hash, err := msg.GetString("hash")
 	if err != nil {
 		log.Println(err)
@@ -633,7 +626,7 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 			log.Println(err)
 			return
 		}
-		blockFile, err = ioutil.TempFile("", "daisy")
+		blockFile, err = os.CreateTemp("", "daisy")
 		if err != nil {
 			log.Println(err)
 			return
@@ -676,7 +669,7 @@ func (p2pc *p2pConnection) handleBlock(msg StrIfMap) {
 			return
 		}
 		defer resp.Body.Close()
-		blockFile, err = ioutil.TempFile("", "daisy")
+		blockFile, err = os.CreateTemp("", "daisy")
 		if err != nil {
 			log.Println("Error creating temp file", err)
 			return
@@ -752,8 +745,8 @@ func p2pConnectPeer(address string) (*p2pConnection, error) {
 		return nil, fmt.Errorf("Connection to %s already exists", addr.String())
 	}
 
-	localAddresses := getLocalAddresses()
-	if inStrings(addr.IP.String(), localAddresses) {
+	localAddresses := util.LocalAddresses()
+	if slices.Contains(localAddresses, addr.IP.String()) {
 		return nil, fmt.Errorf("Refusing to connect to myself at %s", addr.IP)
 	}
 
@@ -771,8 +764,8 @@ func p2pSetupPeer(address string, conn net.Conn) (*p2pConnection, error) {
 	p2pc := p2pConnection{
 		conn:         conn,
 		address:      address,
-		chanToPeer:   make(chan interface{}, 5),
-		chanFromPeer: make(chan StrIfMap, 5),
+		chanToPeer:   make(chan any, 5),
+		chanFromPeer: make(chan util.StrIfMap, 5),
 	}
 	p2pPeers.Add(&p2pc)
 	return &p2pc, nil

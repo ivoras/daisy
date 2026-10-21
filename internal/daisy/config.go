@@ -1,13 +1,12 @@
-package main
+package daisy
 
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/user"
+	"path/filepath"
 )
 
 // DefaultP2PPort is the default TCP port for p2p connections
@@ -26,7 +25,7 @@ var cfg struct {
 	configFile     string
 	P2pPort        int    `json:"p2p_port"`
 	DataDir        string `json:"data_dir"`
-	httpPort       int    `json:"http_port"`
+	httpPort       int
 	showHelp       bool
 	faster         bool
 	p2pBlockInline bool
@@ -38,7 +37,7 @@ func configInit() {
 	if err != nil {
 		log.Panicln(err)
 	}
-	cfg.DataDir = fmt.Sprintf("%s/%s", u.HomeDir, DefaultDataDir)
+	cfg.DataDir = filepath.Join(u.HomeDir, DefaultDataDir)
 
 	// Init defaults
 	cfg.P2pPort = DefaultP2PPort
@@ -85,7 +84,7 @@ func configInit() {
 
 // Loads the JSON config file.
 func loadConfigFile() {
-	data, err := ioutil.ReadFile(cfg.configFile)
+	data, err := os.ReadFile(cfg.configFile)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -1,14 +1,16 @@
-package main
+package daisy
 
 import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/ivoras/daisy/internal/util"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -49,14 +51,14 @@ CREATE INDEX blockchain_sigkey_hash ON blockchain(sigkey_hash);
 
 // DbPubKey is the convenience structure holding information from the pubkeys table
 type DbPubKey struct {
-	publicKeyHash  string            `json:"pub_key_hash"`
-	publicKeyBytes []byte            `json:"pub_key"`
-	state          string            `json:"state"`
-	timeAdded      time.Time         `json:"time_added"`
-	isRevoked      bool              `json:"is_revoked"`
-	timeRevoked    time.Time         `json:"time_revoked"`
-	addBlockHeight int               `json:"block_height_added"`
-	metadata       map[string]string `json:"metadata"`
+	publicKeyHash  string
+	publicKeyBytes []byte
+	state          string
+	timeAdded      time.Time
+	isRevoked      bool
+	timeRevoked    time.Time
+	addBlockHeight int
+	metadata       map[string]string
 }
 
 const pubKeysTableCreate = `
@@ -120,7 +122,7 @@ var privateDb *sql.DB
 
 // Initialises the system databases
 func dbInit() {
-	dbFileName := fmt.Sprintf("%s/%s", cfg.DataDir, mainDbFileName)
+	dbFileName := filepath.Join(cfg.DataDir, mainDbFileName)
 	_, err := os.Stat(dbFileName)
 	mainDbFileExists := err == nil
 	mainDb, err = sql.Open("sqlite3", dbFileName)
@@ -152,14 +154,14 @@ func dbInit() {
 			log.Panic(err)
 		}
 		for peer := range bootstrapPeers {
-			_, err = mainDb.Exec("INSERT INTO peers(address, time_added, permanent) VALUES (?, ?, ?)", peer, getNowUTC(), true)
+			_, err = mainDb.Exec("INSERT INTO peers(address, time_added, permanent) VALUES (?, ?, ?)", peer, util.NowUTC(), true)
 			if err != nil {
 				log.Panic(err)
 			}
 		}
 	}
 
-	dbFileName = fmt.Sprintf("%s/%s", cfg.DataDir, privateDbFilename)
+	dbFileName = filepath.Join(cfg.DataDir, privateDbFilename)
 	_, err = os.Stat(dbFileName)
 	privateDbExists := err == nil
 	privateDb, err = sql.Open("sqlite3", dbFileName)
@@ -235,7 +237,7 @@ func dbWritePublicKey(pubkey []byte, hash string, blockHeight int) {
 
 // Marks a public key as revoked.
 func dbRevokePublicKey(hash string) {
-	_, err := mainDb.Exec("UPDATE pubkeys SET time_revoked=? WHERE pubkey_hash=?", getNowUTC(), hash)
+	_, err := mainDb.Exec("UPDATE pubkeys SET time_revoked=? WHERE pubkey_hash=?", util.NowUTC(), hash)
 	if err != nil {
 		log.Panic(err)
 	}
@@ -307,10 +309,10 @@ func dbGetAPrivateKey() ([]byte, string, error) {
 	var publicKeyHash string
 	var privateKey string
 	err := privateDb.QueryRow("SELECT pubkey_hash, privkey FROM privkeys LIMIT 1").Scan(&publicKeyHash, &privateKey)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.Fatal(err)
 	}
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", err
 	}
 	privateKeyBytes, err := hex.DecodeString(privateKey)
@@ -330,22 +332,22 @@ func dbGetPublicKey(publicKeyHash string) (*DbPubKey, error) {
 	var metadata string
 	err := mainDb.QueryRow("SELECT pubkey_hash, pubkey, state, time_added, COALESCE(time_revoked, -1), COALESCE(metadata, ''), block_height FROM pubkeys WHERE pubkey_hash=?", publicKeyHash).Scan(
 		&dbpk.publicKeyHash, &publicKeyHexString, &dbpk.state, &timeAdded, &timeRevoked, &metadata, &dbpk.addBlockHeight)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.Panicln(err)
 	}
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	dbpk.publicKeyBytes, err = hex.DecodeString(publicKeyHexString)
 	if err != nil {
 		return nil, err
 	}
-	dbpk.timeAdded = unixTimeStampToUTCTime(timeAdded)
+	dbpk.timeAdded = util.UnixTimeStampToUTCTime(timeAdded)
 	if err != nil {
 		return nil, err
 	}
 	if timeRevoked != -1 {
-		dbpk.timeRevoked = unixTimeStampToUTCTime(timeRevoked)
+		dbpk.timeRevoked = util.UnixTimeStampToUTCTime(timeRevoked)
 		if err != nil {
 			log.Println("Public key timeRevoked parsing failed for", publicKeyHash)
 			return nil, err
@@ -369,7 +371,7 @@ func dbGetBlockHashByHeight(height int) string {
 	var hash string
 	err := mainDb.QueryRow("SELECT hash FROM blockchain WHERE height=?", height).Scan(&hash)
 	if err != nil {
-		if err != sql.ErrNoRows {
+		if !errors.Is(err, sql.ErrNoRows) {
 			log.Panicln(err)
 		}
 	}
@@ -384,10 +386,10 @@ func dbGetBlockByHeight(height int) (*DbBlockchainBlock, error) {
 	var timeAccepted int
 	err := mainDb.QueryRow("SELECT hash, height, prev_hash, sigkey_hash, hash_signature, prev_hash_signature, time_accepted, version FROM blockchain WHERE height=?", height).Scan(
 		&dbb.Hash, &dbb.Height, &dbb.PreviousBlockHash, &dbb.SignaturePublicKeyHash, &hashSignatureHex, &prevHashSignatureHex, &timeAccepted, &dbb.Version)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.Panicln(err)
 	}
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	dbb.PreviousBlockHashSignature, err = hex.DecodeString(prevHashSignatureHex)
@@ -398,7 +400,7 @@ func dbGetBlockByHeight(height int) (*DbBlockchainBlock, error) {
 	if err != nil {
 		return nil, err
 	}
-	dbb.TimeAccepted = unixTimeStampToUTCTime(timeAccepted)
+	dbb.TimeAccepted = util.UnixTimeStampToUTCTime(timeAccepted)
 	if err != nil {
 		return nil, err
 	}
@@ -413,10 +415,10 @@ func dbGetBlock(hash string) (*DbBlockchainBlock, error) {
 	var timeAccepted int
 	err := mainDb.QueryRow("SELECT hash, height, prev_hash, sigkey_hash, hash_signature, prev_hash_signature, time_accepted, version FROM blockchain WHERE hash=?", hash).Scan(
 		&dbb.Hash, &dbb.Height, &dbb.PreviousBlockHash, &dbb.SignaturePublicKeyHash, &hashSignatureHex, &prevHashSignatureHex, &timeAccepted, &dbb.Version)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.Panicln(err)
 	}
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	dbb.PreviousBlockHashSignature, err = hex.DecodeString(prevHashSignatureHex)
@@ -427,7 +429,7 @@ func dbGetBlock(hash string) (*DbBlockchainBlock, error) {
 	if err != nil {
 		return nil, err
 	}
-	dbb.TimeAccepted = unixTimeStampToUTCTime(timeAccepted)
+	dbb.TimeAccepted = util.UnixTimeStampToUTCTime(timeAccepted)
 	if err != nil {
 		return nil, err
 	}
@@ -487,14 +489,14 @@ func dbGetSavedPeers() peerStringMap {
 			log.Println(err)
 			continue
 		}
-		result[address] = unixTimeStampToUTCTime(tmInt)
+		result[address] = util.UnixTimeStampToUTCTime(tmInt)
 	}
 	return result
 }
 
 // Saves a p2p peer address to the db
 func dbSavePeer(address string) {
-	_, err := mainDb.Exec("INSERT OR REPLACE INTO peers(address, time_added) VALUES (?, ?)", address, getNowUTC())
+	_, err := mainDb.Exec("INSERT OR REPLACE INTO peers(address, time_added) VALUES (?, ?)", address, util.NowUTC())
 	if err != nil {
 		log.Panic(err)
 	}
