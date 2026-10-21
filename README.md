@@ -3,7 +3,7 @@
 Current status: 
 
 * early alpha / nearly feature-complete wrt blockchain.
-* network / p2p code needs to be revamped, likely using an existing p2p library instead of rolling our own. Currently, Daisy can only work on machines with public IP addresses (no NAT handling at all).
+* the p2p code is home-made (see [docs/PROTOCOL.md](docs/PROTOCOL.md)), it works across NATs by connecting out (blocks are transferred over the connection which the node itself has opened), and can ask the router to forward ports (`-upnp`). A node behind a NAT that can't forward ports can fetch and publish blocks, but others can't connect to it. There is no encryption or authentication of the p2p connections yet.
 
 Documentation and articles:
 
@@ -43,6 +43,7 @@ The blockchain is basically very well suited to data exchange between otherwise 
 * ✔ Add a `daisy pull` command similar to "docker pull" which would replicate a blockchain from an existing node
 * ✔ Make creating new blockchains from scratch possible without changing the code
 * ✔ Implement the "URL" encoding for block transfers: so the data in the JSON messages isn't block data, but an URL to the block data.
+* ✔ Blocks are transferred over the p2p connection (so nodes behind a NAT work), the protocol is versioned, there are DNS seeds, lists of peers, mDNS, UPnP / NAT-PMP port forwarding and an address book which is hard to fill with a few malicious peers
 * Implement nicer error handling when replying to messages
 * Refactor db..., action... and blockchain... funcs into struct methods
 * Reimplement P2P as a WebSockets protocol, allowing HTTP REST APIs such as getblock to be served from the same port.
@@ -74,6 +75,13 @@ All the blocks in the blockchain can be queried at the same time by using a comm
 Since this is a private blockchain, not everyone has the ability to create new blocks. I'm thinking of this as a more of a framework for creating new single-purpose blockchain instances. If you want to contribute to the default blockchain (i.e. store data, i.e. add new sqlite databases to the blockchain), run the `./daisy mykeys` command, send me the public key hash to sign, and an explanation / introductory letter saying why and what do you want to do with it, and I'll sign your key and accept it into the blockchain as one of the signatories.
 
 When you have a private key whose public part is added to the list of signatories, running `./daisy signimportblock mydata.db` will import the mydata.db file into the blockchain. Before it's imported, the database is modified to contain the Daisy metadata tables.
+
+## Finding peers, and NATs
+
+* `-upnp`: ask the router to forward the ports with UPnP or NAT-PMP (it can be set as `"upnp": true` in the configuration file too).
+* `-mdns`: advertise the node on the local network and find the other nodes there (`"mdns": true`).
+* `dns_seeds` and `peer_list_urls` in `chainparams.json` (see `chainparams.example.json`): where else to look for peers.
+* `http://<node>:2018/status` shows the state of a running node, `http://<node>:2018/peers` the peers it knows to be alive.
 
 # Current status
 

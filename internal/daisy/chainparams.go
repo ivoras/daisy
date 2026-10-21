@@ -22,6 +22,12 @@ type ChainParams struct {
 	// List of host:port string specifying default peers for this blockchain. If empty, the defaults are used.
 	BootstrapPeers []string `json:"bootstrap_peers"`
 
+	// DNS names ("host" or "host:port") whose addresses are peers of this blockchain. The default port is used if there is none.
+	DNSSeeds []string `json:"dns_seeds"`
+
+	// URLs of lists of peers (JSON {"peers": ["host:port"]}, a JSON array or one address per line)
+	PeerListURLs []string `json:"peer_list_urls"`
+
 	// Consensus algorithm used: "PoA", "PoW"
 	ConsensusTypeString string `json:"consensus_type"`
 	ConsensusType       int    `json:"-"`

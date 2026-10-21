@@ -64,10 +64,70 @@ func blockWebSendChainParams(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Serves the addresses of the peers that are alive, so that others can find them
+func blockWebSendPeers(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write(util.JSONifyBytes(map[string][]string{"peers": abList(100)})); err != nil {
+		log.Println(err)
+	}
+}
+
+// nodeStatus is what the node says about itself
+type nodeStatus struct {
+	Version     string `json:"version"`
+	Protocol    int    `json:"protocol"`
+	MinProtocol int    `json:"min_protocol"`
+	Root        string `json:"root"`
+	Height      int    `json:"height"`
+	TipHash     string `json:"tip_hash,omitempty"`
+	ChainScore  int    `json:"chain_score"`
+	Peers       struct {
+		Inbound  int `json:"inbound"`
+		Outbound int `json:"outbound"`
+	} `json:"peers"`
+	AddressBook struct {
+		New   int `json:"new"`
+		Tried int `json:"tried"`
+	} `json:"address_book"`
+	PublicHost string    `json:"public_host,omitempty"` // The address which the peers see us at
+	Reachable  bool      `json:"reachable"`             // Peers have been able to connect to our p2p port
+	NAT        natStatus `json:"nat"`
+}
+
+func currentNodeStatus() nodeStatus {
+	var s nodeStatus
+	s.Version, s.Protocol, s.MinProtocol = p2pClientVersionString, p2pProtocolVersion, p2pMinProtocolVersion
+	s.Root = chainParams.GenesisBlockHash
+	s.Height = dbGetBlockchainHeight()
+	if tip, err := dbGetTipBlock(); err == nil {
+		s.TipHash, s.ChainScore = tip.Hash, tip.TotalScore
+	}
+	s.Peers.Inbound, s.Peers.Outbound = p2pPeers.Count(false), p2pPeers.Count(true)
+	s.AddressBook.New, s.AddressBook.Tried = abCounts()
+	s.PublicHost = selfInfo.seenAs()
+	if s.PublicHost == "" {
+		s.PublicHost = selfInfo.getExternal()
+	}
+	s.Reachable = selfInfo.isReachable()
+	if natMapper != nil {
+		s.NAT = natMapper.getStatus()
+	}
+	return s
+}
+
+func blockWebSendStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write(util.JSONifyBytes(currentNodeStatus())); err != nil {
+		log.Println(err)
+	}
+}
+
 func blockWebServer() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /block/{id}", blockWebSendBlock)
 	mux.HandleFunc("GET /chainparams.json", blockWebSendChainParams)
+	mux.HandleFunc("GET /peers", blockWebSendPeers)
+	mux.HandleFunc("GET /status", blockWebSendStatus)
 
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.httpPort),

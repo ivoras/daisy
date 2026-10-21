@@ -40,6 +40,13 @@ func Main() {
 	go p2pServer()
 	go p2pClient()
 	go blockWebServer()
+	if cfg.UPnP {
+		natMapper = newNATManager(map[int]string{cfg.P2pPort: "Daisy P2P", cfg.httpPort: "Daisy blocks"})
+		natMapper.start()
+	}
+	if cfg.MDNS {
+		mdns = startMDNS()
+	}
 
 	for {
 		select {
@@ -47,6 +54,8 @@ func Main() {
 			switch msg.event {
 			case eventQuit:
 				log.Println("Exiting")
+				natMapper.stop()
+				mdns.stop()
 				os.Exit(msg.idata)
 			}
 		case sig := <-sigChannel:

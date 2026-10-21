@@ -56,6 +56,23 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
 - Don't run networking code in tests; the P2P layer uses package-level singletons and dials real hosts.
   Unit-test the pure packages and the deterministic functions in `internal/daisy`.
 
+## Protocol, address book, NAT
+
+- `docs/PROTOCOL.md` is the reference. Change it with the code. `p2pProtocolVersion` / `p2pMinProtocolVersion` (in
+  `p2pprotocol.go`) are bumped only when a peer must know that it may use something new, or must be kept away;
+  adding an optional field or message needs no bump (unknown ones are ignored). Gate new behaviour on `p2pc.protocol`.
+- Blocks to protocol 2 peers go through `blockSender` (a `lazyMessage` in the outbox: one chunk per flush pass so the
+  connection keeps reading). Received chunks are checked for order and total size, bounded per connection and globally.
+- `addrbook.go` is the only place that writes the `peers` table (`abAdd`, `abGood`, `abFailed`, `abSelect`...). Peers
+  are made known by gossip, seeds, lists and mDNS through `p2pCtrlConnectPeers` -> `handleConnectPeers`, which only puts them
+  in the book; `maintainConnections` (every tick, and after new addresses) decides whom to connect to. An address
+  becomes "tried" only after a valid hello.
+- `nat.go` (UPnP/NAT-PMP, `-upnp`) and `mdns.go` (`-mdns`) are opt-in and start from `run.go`; `nat.go` talks to the
+  router through the `portMapper` interface so it's tested with a fake. `DAISY_TEST_MDNS=1` enables a test that needs
+  a network with multicast.
+- `selfInfo` is what peers tell us about ourselves (the address they see, whether they could connect). It needs a
+  quorum of different peers before it's believed, and it's only informational or used to avoid connecting to ourselves.
+
 ## Block tree and fork choice
 
 - `consensus.go`: scoring (in turn 2, out of turn 1), `isBetterTip`, and `validateBlock`/`validateKeyOps`, which are pure
@@ -109,10 +126,10 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
 
 These were found in a review and are tracked here so they aren't mistaken for intended behaviour:
 
-- P2P has no encryption or authentication. Peer discovery still trusts what peers gossip about who is alive
-  (it only dials them, and remembers them after a valid hello), so a few malicious nodes can crowd out others.
-- There is no protocol version negotiation: `hello.version` is only logged. Compatibility relies on unknown JSON
-  fields and unknown messages being ignored. A rule change would need a protocol number and an activation height.
+- P2P has no encryption or authentication. Peers can still lie about who is alive; the address book limits how much of
+  it one network or one source can fill, and addresses are remembered as tried only after a valid hello.
+- The p2p protocol is versioned, but the *consensus rules* are not: a change in which blocks are valid would fork the chain
+  and needs an activation height in `chainparams.json` that doesn't exist yet.
 - Fork choice is by score only; there is no finality, and a branch deeper than `maxReorgDepth` is never accepted,
   so a node that was offline for longer than that during a fork must be re-created (`daisy pull`).
 - `mining.CountStartZeroBits` counts zero bits across all bytes rather than only leading ones (the PoW
