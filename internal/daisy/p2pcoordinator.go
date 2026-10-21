@@ -32,7 +32,8 @@ type p2pCoordinatorType struct {
 	lastTickBlockchainHeight int
 	recentlyRequestedBlocks  *util.StringSetWithExpiry
 	lastReconnectTime        time.Time
-	badPeers                 *util.StringSetWithExpiry
+	badPeers                 *util.StringSetWithExpiry // Addresses ("ip:port") we have dialed and shouldn't dial again
+	badHosts                 *util.StringSetWithExpiry // Hosts (IP addresses) whose connections are refused and not dialed
 }
 
 // XXX: singletons in go?
@@ -41,6 +42,22 @@ var p2pCoordinator = p2pCoordinatorType{
 	lastReconnectTime:       time.Now(),
 	timeTicks:               make(chan int),
 	badPeers:                util.NewStringSetWithExpiry(15 * time.Minute),
+	badHosts:                util.NewStringSetWithExpiry(15 * time.Minute),
+}
+
+// isBanned tells if we shouldn't have anything to do with the given peer address
+func (co *p2pCoordinatorType) isBanned(addr *net.TCPAddr) bool {
+	return co.badPeers.Has(addr.String()) || co.badHosts.Has(addr.IP.String())
+}
+
+// banPeer temporarily bans the host of a peer which has violated the protocol
+func (co *p2pCoordinatorType) banPeer(p2pc *p2pConnection) {
+	host, err := remoteHost(p2pc.conn.RemoteAddr())
+	if err != nil {
+		return
+	}
+	log.Println("Banning", host, "for protocol violations")
+	co.badHosts.Add(host)
 }
 
 func (co *p2pCoordinatorType) Run() {
@@ -89,11 +106,14 @@ func (co *p2pCoordinatorType) handleConnectPeers(addresses []string) {
 			continue
 		}
 		canonicalAddress := fmt.Sprintf("%s:%d", host, DefaultP2PPort)
-		if p2pPeers.HasAddress(canonicalAddress) || co.badPeers.Has(canonicalAddress) {
+		if p2pPeers.HasAddress(canonicalAddress) {
 			continue
 		}
 		addr, err := net.ResolveTCPAddr("tcp", canonicalAddress)
 		if err != nil {
+			continue
+		}
+		if co.isBanned(addr) {
 			continue
 		}
 		if slices.Contains(localAddresses, addr.IP.String()) {
@@ -104,7 +124,7 @@ func (co *p2pCoordinatorType) handleConnectPeers(addresses []string) {
 		if err != nil {
 			continue
 		}
-		p2pc, err := p2pSetupPeer(addr.String(), conn)
+		p2pc, err := p2pSetupPeer(addr.String(), conn, true)
 		if err != nil {
 			log.Println("handleConnectPeers:", err)
 			continue
