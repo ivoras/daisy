@@ -49,7 +49,7 @@ func readLine(r *bufio.Reader, maxLen int) ([]byte, error) {
 	}
 }
 
-var blockURLPathRegexp = regexp.MustCompile(`^/block/[0-9]{1,9}$`)
+var blockURLPathRegexp = regexp.MustCompile(`^/block/([0-9]{1,9}|[0-9a-f]{64})$`)
 
 // blockHTTPURL validates the block URL a peer has sent, and returns the URL we are willing to fetch.
 //

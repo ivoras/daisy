@@ -117,10 +117,6 @@ func actionSignImportBlock(fn string) {
 	if err != nil {
 		log.Panic(err)
 	}
-	previousBlockHashSignature, err := hex.DecodeString(signature)
-	if err != nil {
-		log.Fatalln(err)
-	}
 	if creatorString, ok := pkdb.metadata["BlockCreator"]; ok {
 		err = dbSetMetaString(db, "Creator", creatorString)
 		if err != nil {
@@ -144,18 +140,25 @@ func actionSignImportBlock(fn string) {
 	}
 	blockHashSignature, _ := hex.DecodeString(signature)
 
-	newBlockHeight := lastBlockHeight + 1
-	newBlock := DbBlockchainBlock{Hash: blockHashHex, HashSignature: blockHashSignature, PreviousBlockHash: dbb.Hash, PreviousBlockHashSignature: previousBlockHashSignature,
-		Version: CurrentBlockVersion, SignaturePublicKeyHash: pkdb.publicKeyHash, Height: newBlockHeight, TimeAccepted: time.Now()}
-
-	err = blockchainCopyFile(fn, newBlockHeight)
+	// The block goes through the same validation as the blocks of the other nodes: a block which they would not
+	// accept is of no use to anybody.
+	keysBefore, err := dbLoadKeySet()
 	if err != nil {
-		log.Panic(err)
+		log.Fatalln(err)
 	}
-
-	err = dbInsertBlock(&newBlock)
+	info, err := acceptBlock(fn, blockHashSignature)
 	if err != nil {
-		log.Panic(err)
+		log.Fatalln("The block cannot be imported:", err)
+	}
+	switch info.result {
+	case blockNewTip:
+		if inTurnSigner(keysBefore, info.height) == pkdb.publicKeyHash {
+			log.Println("Imported block", info.hash, "at height", info.height, "(it's this key's turn)")
+		} else {
+			log.Println("Imported block", info.hash, "at height", info.height, "(out of turn: it will lose against a block of the signatory whose turn it is)")
+		}
+	default:
+		log.Println("Block", info.hash, "is", info.result)
 	}
 }
 
@@ -409,6 +412,14 @@ func actionNewChain(jsonFilename string) {
 	if err != nil {
 		log.Panic(err)
 	}
+	// The genesis keys are the first signatories, from block 0 (not just keys of this node)
+	genesisOps, err := readKeyOps(blockFilename)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	if err = dbApplyKeyOps(mainDb, genesisBlockHeight, genesisOps); err != nil {
+		log.Fatalln(err)
+	}
 
 	// Reopen the database to verify
 	log.Println("Reloading to verify...")
@@ -529,7 +540,6 @@ func actionPull(baseURL string) {
 				}
 				if err = dcrypto.VerifyHex(pubKey, chainParams.GenesisBlockHash, chainParams.GenesisBlockHashSignature); err == nil {
 					verified = true
-					dbWritePublicKey(op.publicKeyBytes, chainParams.CreatorPublicKey, 0)
 				} else {
 					log.Fatalln("Error verifying genesis block signature", err)
 				}
@@ -538,6 +548,9 @@ func actionPull(baseURL string) {
 	}
 	if !verified {
 		log.Fatalln("Cannot verify genesis block signature")
+	}
+	if err = dbApplyKeyOps(mainDb, genesisBlockHeight, kops); err != nil {
+		log.Fatalln(err)
 	}
 	blk.Close()
 

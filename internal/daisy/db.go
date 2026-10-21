@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/ivoras/daisy/internal/util"
@@ -31,6 +33,10 @@ type DbBlockchainBlock struct {
 	HashSignature              []byte
 	TimeAccepted               time.Time
 	Version                    int
+
+	// TotalScore is the sum of the scores of this block and all the blocks before it, see blockScore().
+	// The branch with the highest total score is the best chain.
+	TotalScore int
 }
 
 // Note: all db times are Unix timestamps in the UTC zone
@@ -44,10 +50,31 @@ CREATE TABLE blockchain (
 	prev_hash			VARCHAR NOT NULL,
 	prev_hash_signature	VARCHAR NOT NULL,
 	time_accepted		INTEGER NOT NULL,
-	version				INTEGER NOT NULL
+	version				INTEGER NOT NULL,
+	total_score			INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX blockchain_sigkey_hash ON blockchain(sigkey_hash);
 `
+
+// Valid blocks which are not (or not any more) on the best chain, i.e. the other branches of the block tree.
+// Same columns as the blockchain table, except that there can be several blocks at one height.
+const sideBlocksTableCreate = `
+CREATE TABLE sideblocks (
+	height				INTEGER NOT NULL,
+	sigkey_hash			VARCHAR NOT NULL,
+	hash				VARCHAR NOT NULL PRIMARY KEY,
+	hash_signature		VARCHAR NOT NULL,
+	prev_hash			VARCHAR NOT NULL,
+	prev_hash_signature	VARCHAR NOT NULL,
+	time_accepted		INTEGER NOT NULL,
+	version				INTEGER NOT NULL,
+	total_score			INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX sideblocks_prev_hash ON sideblocks(prev_hash);
+`
+
+// The version of the layout and contents of the system tables (see dbMigrate and reconcileChainState)
+const currentSchemaVersion = 2
 
 // DbPubKey is the convenience structure holding information from the pubkeys table
 type DbPubKey struct {
@@ -68,8 +95,9 @@ CREATE TABLE pubkeys (
 	state			CHAR NOT NULL,
 	time_added		INTEGER NOT NULL,
 	time_revoked	INTEGER,
-	block_height	INTEGER NOT NULL,
-	metadata		VARCHAR -- JSON
+	block_height	INTEGER NOT NULL, -- the block which added the key. Negative: the key is only known locally, it isn't on the blockchain
+	metadata		VARCHAR, -- JSON
+	revoke_block_height	INTEGER -- the block which revoked the key
 );`
 
 const privateTableCreate = `
@@ -91,7 +119,8 @@ const peersTableCreate = `
 CREATE TABLE peers (
 	address			VARCHAR NOT NULL PRIMARY KEY,	-- in the format "address:port", lowercase
 	time_added		INTEGER NOT NULL, -- time last seen
-	permanent		BOOLEAN NOT NULL DEFAULT 0
+	permanent		BOOLEAN NOT NULL DEFAULT 0,
+	failures		INTEGER NOT NULL DEFAULT 0 -- failed connection attempts since the last success
 );
 `
 
@@ -129,12 +158,14 @@ func dbInit() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	freshSchema := false
 	if !mainDbFileExists || !dbTableExists(mainDb, "blockchain") {
 		// Create system tables
 		_, err = mainDb.Exec(blockchainTableCreate)
 		if err != nil {
 			log.Panic(err)
 		}
+		freshSchema = true
 	}
 	if !dbTableExists(mainDb, "pubkeys") {
 		_, err = mainDb.Exec(pubKeysTableCreate)
@@ -160,6 +191,8 @@ func dbInit() {
 			}
 		}
 	}
+
+	dbMigrate(freshSchema)
 
 	dbFileName = filepath.Join(cfg.DataDir, privateDbFilename)
 	_, err = os.Stat(dbFileName)
@@ -230,14 +263,6 @@ func dbPublicKeyExists(hash string) bool {
 func dbWritePublicKey(pubkey []byte, hash string, blockHeight int) {
 	_, err := mainDb.Exec("INSERT INTO pubkeys(pubkey_hash, pubkey, state, time_added, block_height) VALUES (?, ?, ?, ?, ?)",
 		hash, hex.EncodeToString(pubkey), "A", time.Now().Unix(), blockHeight)
-	if err != nil {
-		log.Panic(err)
-	}
-}
-
-// Marks a public key as revoked.
-func dbRevokePublicKey(hash string) {
-	_, err := mainDb.Exec("UPDATE pubkeys SET time_revoked=? WHERE pubkey_hash=?", util.NowUTC(), hash)
 	if err != nil {
 		log.Panic(err)
 	}
@@ -378,62 +403,66 @@ func dbGetBlockHashByHeight(height int) string {
 	return hash
 }
 
-// Returns a block indexed by the given height.
-func dbGetBlockByHeight(height int) (*DbBlockchainBlock, error) {
+// The columns of the blockchain and sideblocks tables, in the order scanBlock() expects them
+const blockColumns = "hash, height, prev_hash, sigkey_hash, hash_signature, prev_hash_signature, time_accepted, version, total_score"
+
+// Reads a block record from the result of selecting blockColumns
+func scanBlock(row *sql.Row) (*DbBlockchainBlock, error) {
 	var dbb DbBlockchainBlock
-	var hashSignatureHex string
-	var prevHashSignatureHex string
+	var hashSignatureHex, prevHashSignatureHex string
 	var timeAccepted int
-	err := mainDb.QueryRow("SELECT hash, height, prev_hash, sigkey_hash, hash_signature, prev_hash_signature, time_accepted, version FROM blockchain WHERE height=?", height).Scan(
-		&dbb.Hash, &dbb.Height, &dbb.PreviousBlockHash, &dbb.SignaturePublicKeyHash, &hashSignatureHex, &prevHashSignatureHex, &timeAccepted, &dbb.Version)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		log.Panicln(err)
+	err := row.Scan(&dbb.Hash, &dbb.Height, &dbb.PreviousBlockHash, &dbb.SignaturePublicKeyHash, &hashSignatureHex,
+		&prevHashSignatureHex, &timeAccepted, &dbb.Version, &dbb.TotalScore)
+	if err != nil {
+		return nil, err // Including sql.ErrNoRows
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	if dbb.PreviousBlockHashSignature, err = hex.DecodeString(prevHashSignatureHex); err != nil {
 		return nil, err
 	}
-	dbb.PreviousBlockHashSignature, err = hex.DecodeString(prevHashSignatureHex)
-	if err != nil {
-		return nil, err
-	}
-	dbb.HashSignature, err = hex.DecodeString(hashSignatureHex)
-	if err != nil {
+	if dbb.HashSignature, err = hex.DecodeString(hashSignatureHex); err != nil {
 		return nil, err
 	}
 	dbb.TimeAccepted = util.UnixTimeStampToUTCTime(timeAccepted)
-	if err != nil {
-		return nil, err
-	}
 	return &dbb, nil
 }
 
-// Returns a block of the given hash
+// Returns a block of the best chain, indexed by the given height.
+func dbGetBlockByHeight(height int) (*DbBlockchainBlock, error) {
+	return scanBlock(mainDb.QueryRow("SELECT "+blockColumns+" FROM blockchain WHERE height=?", height))
+}
+
+// Returns a block of the best chain, of the given hash
 func dbGetBlock(hash string) (*DbBlockchainBlock, error) {
-	var dbb DbBlockchainBlock
-	var hashSignatureHex string
-	var prevHashSignatureHex string
-	var timeAccepted int
-	err := mainDb.QueryRow("SELECT hash, height, prev_hash, sigkey_hash, hash_signature, prev_hash_signature, time_accepted, version FROM blockchain WHERE hash=?", hash).Scan(
-		&dbb.Hash, &dbb.Height, &dbb.PreviousBlockHash, &dbb.SignaturePublicKeyHash, &hashSignatureHex, &prevHashSignatureHex, &timeAccepted, &dbb.Version)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		log.Panicln(err)
+	return scanBlock(mainDb.QueryRow("SELECT "+blockColumns+" FROM blockchain WHERE hash=?", hash))
+}
+
+// Returns a block which is not on the best chain, of the given hash
+func dbGetSideBlock(hash string) (*DbBlockchainBlock, error) {
+	return scanBlock(mainDb.QueryRow("SELECT "+blockColumns+" FROM sideblocks WHERE hash=?", hash))
+}
+
+// Returns the block of the given hash, wherever it is in the block tree.
+// onBestChain tells if it's part of the best chain.
+func dbGetAnyBlock(hash string) (dbb *DbBlockchainBlock, onBestChain bool, err error) {
+	if dbb, err = dbGetBlock(hash); err == nil {
+		return dbb, true, nil
 	}
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, err
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, false, err
 	}
-	dbb.PreviousBlockHashSignature, err = hex.DecodeString(prevHashSignatureHex)
-	if err != nil {
-		return nil, err
-	}
-	dbb.HashSignature, err = hex.DecodeString(hashSignatureHex)
-	if err != nil {
-		return nil, err
-	}
-	dbb.TimeAccepted = util.UnixTimeStampToUTCTime(timeAccepted)
-	if err != nil {
-		return nil, err
-	}
-	return &dbb, nil
+	dbb, err = dbGetSideBlock(hash)
+	return dbb, false, err
+}
+
+// Returns the last block of the best chain
+func dbGetTipBlock() (*DbBlockchainBlock, error) {
+	return dbGetBlockByHeight(dbGetBlockchainHeight())
+}
+
+// Tests if a block with the given hash is known, either on the best chain or on another branch
+func dbBlockHashKnown(hash string) bool {
+	_, _, err := dbGetAnyBlock(hash)
+	return err == nil
 }
 
 // Tests if a block with the given hash exists in the db
@@ -456,11 +485,129 @@ func dbBlockHeightExists(h int) bool {
 	return count > 0
 }
 
+// Something we can run SQL statements on: the database or a transaction
+type dbExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
 // Inserts a block record into the main database, without validation
 func dbInsertBlock(dbb *DbBlockchainBlock) error {
-	_, err := mainDb.Exec("INSERT INTO blockchain (hash, height, prev_hash, sigkey_hash, hash_signature, prev_hash_signature, time_accepted, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		dbb.Hash, dbb.Height, dbb.PreviousBlockHash, dbb.SignaturePublicKeyHash, hex.EncodeToString(dbb.HashSignature), hex.EncodeToString(dbb.PreviousBlockHashSignature),
-		dbb.TimeAccepted.UTC().Unix(), dbb.Version)
+	return dbInsertBlockInto(mainDb, "blockchain", dbb)
+}
+
+// Inserts a block record into the given table (blockchain or sideblocks), without validation
+func dbInsertBlockInto(ex dbExecer, table string, dbb *DbBlockchainBlock) error {
+	_, err := ex.Exec("INSERT INTO "+table+" ("+blockColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		dbb.Hash, dbb.Height, dbb.PreviousBlockHash, dbb.SignaturePublicKeyHash, hex.EncodeToString(dbb.HashSignature),
+		hex.EncodeToString(dbb.PreviousBlockHashSignature), dbb.TimeAccepted.UTC().Unix(), dbb.Version, dbb.TotalScore)
+	return err
+}
+
+// Reads a value from the config table. Returns "" if there isn't one.
+func dbGetConfig(key string) string {
+	var value string
+	err := mainDb.QueryRow("SELECT value FROM config WHERE key=?", key).Scan(&value)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		log.Panic(err)
+	}
+	return value
+}
+
+// Writes a value to the config table
+func dbSetConfig(key, value string) {
+	if _, err := mainDb.Exec("INSERT OR REPLACE INTO config(key, value) VALUES (?, ?)", key, value); err != nil {
+		log.Panic(err)
+	}
+}
+
+func dbColumnExists(db *sql.DB, table, column string) bool {
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?", table, column).Scan(&count)
+	if err != nil {
+		log.Panicln(err)
+	}
+	return count > 0
+}
+
+// Brings the system tables of an older version up to the current layout. This only adds the empty columns and
+// tables: filling them with the data derived from the blocks is done by reconcileChainState() when the blocks
+// are available.
+func dbMigrate(freshSchema bool) {
+	add := func(table, column, definition string) {
+		if dbColumnExists(mainDb, table, column) {
+			return
+		}
+		log.Println("Upgrading the database: adding", table+"."+column)
+		if _, err := mainDb.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition); err != nil {
+			log.Panic(err)
+		}
+	}
+	add("blockchain", "total_score", "INTEGER NOT NULL DEFAULT 0")
+	add("pubkeys", "revoke_block_height", "INTEGER")
+	add("peers", "failures", "INTEGER NOT NULL DEFAULT 0")
+	if !dbTableExists(mainDb, "sideblocks") {
+		if _, err := mainDb.Exec(sideBlocksTableCreate); err != nil {
+			log.Panic(err)
+		}
+	}
+	if freshSchema {
+		dbSetConfig("schema_version", strconv.Itoa(currentSchemaVersion))
+	}
+}
+
+// Loads the signatory keys known to the blockchain (as of its tip) into memory
+func dbLoadKeySet() (*keySet, error) {
+	rows, err := mainDb.Query("SELECT pubkey_hash, pubkey, block_height, COALESCE(revoke_block_height, -1) FROM pubkeys WHERE block_height >= 0")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ks := newKeySet()
+	for rows.Next() {
+		var ki keyInfo
+		var pubKeyHex string
+		if err = rows.Scan(&ki.hash, &pubKeyHex, &ki.addHeight, &ki.revokeHeight); err != nil {
+			return nil, err
+		}
+		if ki.publicKey, err = hex.DecodeString(pubKeyHex); err != nil {
+			return nil, err
+		}
+		ks.keys[ki.hash] = &ki
+	}
+	return ks, rows.Err()
+}
+
+// Records the key operations of a block, which has become part of the best chain, in the pubkeys table
+func dbApplyKeyOps(ex dbExecer, height int, ops map[string][]BlockKeyOp) error {
+	for keyHash, keyOps := range ops {
+		switch keyOps[0].op {
+		case "A":
+			// The key may already be in the table, with a negative height, if it's one of this node's own keys
+			_, err := ex.Exec(`INSERT INTO pubkeys(pubkey_hash, pubkey, state, time_added, block_height) VALUES (?, ?, 'A', ?, ?)
+				ON CONFLICT(pubkey_hash) DO UPDATE SET block_height=excluded.block_height, time_revoked=NULL, revoke_block_height=NULL`,
+				keyHash, hex.EncodeToString(keyOps[0].publicKeyBytes), time.Now().Unix(), height)
+			if err != nil {
+				return err
+			}
+		case "R":
+			if _, err := ex.Exec("UPDATE pubkeys SET time_revoked=?, revoke_block_height=? WHERE pubkey_hash=?", time.Now().Unix(), height, keyHash); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("invalid key op %q", keyOps[0].op)
+		}
+	}
+	return nil
+}
+
+// Forgets the key operations of all the blocks above the given height
+func dbRewindKeys(ex dbExecer, height int) error {
+	if _, err := ex.Exec("UPDATE pubkeys SET time_revoked=NULL, revoke_block_height=NULL WHERE revoke_block_height > ?", height); err != nil {
+		return err
+	}
+	// Keys which were added by the discarded blocks stay in the table, but are not on the blockchain any more
+	_, err := ex.Exec("UPDATE pubkeys SET block_height=-1, time_revoked=NULL, revoke_block_height=NULL WHERE block_height > ?", height)
 	return err
 }
 
@@ -494,9 +641,63 @@ func dbGetSavedPeers() peerStringMap {
 	return result
 }
 
-// Saves a p2p peer address to the db
+// Limits for the table of known peers
+const (
+	// A peer is given up on (unless it's a permanent, bootstrap one) after this many failed connection attempts in a row
+	peerMaxFailures = 5
+
+	// ... or when it hasn't been seen for this long
+	peerMaxAge = 30 * 24 * time.Hour
+
+	// The table doesn't grow beyond this many peers, whatever the other peers gossip to us
+	peerTableMaxSize = 1000
+)
+
+// Gets the peers which are worth connecting to: the ones which haven't repeatedly failed
+func dbGetPeersToDial() peerStringMap {
+	result := peerStringMap{}
+	rows, err := mainDb.Query("SELECT address, time_added FROM peers WHERE failures < ? OR permanent", peerMaxFailures)
+	if err != nil {
+		log.Panic(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tmInt int
+		var address string
+		if err = rows.Scan(&address, &tmInt); err != nil {
+			log.Println(err)
+			continue
+		}
+		result[address] = util.UnixTimeStampToUTCTime(tmInt)
+	}
+	return result
+}
+
+// Saves a p2p peer address to the db, or updates the one which is already there: it's alive now.
 func dbSavePeer(address string) {
-	_, err := mainDb.Exec("INSERT OR REPLACE INTO peers(address, time_added) VALUES (?, ?)", address, util.NowUTC())
+	_, err := mainDb.Exec(`INSERT INTO peers(address, time_added) VALUES (?, ?)
+		ON CONFLICT(address) DO UPDATE SET time_added=excluded.time_added, failures=0`, address, util.NowUTC())
+	if err != nil {
+		log.Panic(err)
+	}
+}
+
+// Records that connecting to the peer has failed
+func dbPeerFailed(address string) {
+	if _, err := mainDb.Exec("UPDATE peers SET failures=failures+1 WHERE address=?", address); err != nil {
+		log.Panic(err)
+	}
+}
+
+// Removes the peers which are dead or old, and the oldest peers if there are too many of them.
+func dbPrunePeers() {
+	_, err := mainDb.Exec("DELETE FROM peers WHERE NOT permanent AND (failures >= ? OR time_added < ?)",
+		peerMaxFailures, time.Now().Add(-peerMaxAge).Unix())
+	if err != nil {
+		log.Panic(err)
+	}
+	_, err = mainDb.Exec(`DELETE FROM peers WHERE NOT permanent AND address NOT IN
+		(SELECT address FROM peers ORDER BY permanent DESC, time_added DESC LIMIT ?)`, peerTableMaxSize)
 	if err != nil {
 		log.Panic(err)
 	}

@@ -22,8 +22,10 @@ func setupTestSysDbs(t *testing.T) {
 	if mainDb, err = sql.Open("sqlite3", filepath.Join(dir, "main.db")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = mainDb.Exec(blockchainTableCreate); err != nil {
-		t.Fatal(err)
+	for _, ddl := range []string{blockchainTableCreate, sideBlocksTableCreate, pubKeysTableCreate, configTableCreate, peersTableCreate} {
+		if _, err = mainDb.Exec(ddl); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if privateDb, err = sql.Open("sqlite3", filepath.Join(dir, "private.db")); err != nil {
 		t.Fatal(err)
@@ -79,6 +81,15 @@ func TestConnectionRequestsManyBlocks(t *testing.T) {
 		t.Fatalf("expected a hello message, got %v", hello)
 	}
 
+	// Nothing but hello is accepted from a peer which hasn't said hello
+	remote.SetDeadline(time.Now().Add(5 * time.Second))
+	hello := util.JSONifyBytes(map[string]any{
+		"root": chainParams.GenesisBlockHash, "msg": p2pMsgHello, "p2p_id": 1, "version": "test", "chain_height": 0, "my_peers": []string{},
+	})
+	if _, err := remote.Write(append(hello, '\n')); err != nil {
+		t.Fatal(err)
+	}
+
 	// The hashes must be unique per run: recently requested ones are (rightly) not requested again
 	hashes := map[string]string{}
 	for h := 1; h <= numBlocks; h++ {
@@ -116,6 +127,7 @@ func TestConnectionRequestsManyBlocks(t *testing.T) {
 func TestFloodDoesNotBlockOnStuckPeer(t *testing.T) {
 	setupTestSysDbs(t)
 	stuck := newTestConnection(nil, "1.2.3.4:5") // Nobody is draining its outbox
+	stuck.handshaken = true
 	p2pPeers.Add(stuck)
 	defer p2pPeers.Remove(stuck)
 
