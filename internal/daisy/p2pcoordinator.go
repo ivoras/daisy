@@ -22,7 +22,7 @@ type p2pCtrlMessage struct {
 	payload any
 }
 
-var p2pCtrlChannel = make(chan p2pCtrlMessage, 8)
+var p2pCtrlChannel = make(chan p2pCtrlMessage, 64)
 
 // Data related to the (single instance of) the global p2p coordinator. This is also a
 // single-threaded object, its fields and methods are only expected to be accessed from
@@ -73,11 +73,14 @@ func (co *p2pCoordinatorType) handleSearchForBlocks(p2pcStart *p2pConnection) {
 		MaxBlockHeight: p2pcStart.chainHeight,
 	}
 	log.Printf("Searching for blocks from %d to %d", msg.MinBlockHeight, msg.MaxBlockHeight)
-	p2pcStart.chanToPeer <- msg
+	p2pcStart.send(msg)
 }
 
 func (co *p2pCoordinatorType) handleConnectPeers(addresses []string) {
 	localAddresses := util.LocalAddresses()
+
+	// The peer controls this list, and every address means a (slow) connection attempt
+	addresses = addresses[:min(len(addresses), p2pMaxPeerAddresses)]
 
 	for _, address := range addresses {
 		host, _, err := util.SplitAddress(address)
@@ -97,9 +100,9 @@ func (co *p2pCoordinatorType) handleConnectPeers(addresses []string) {
 			continue
 		}
 		// Detect if there's a canonical peer on the other side, somewhat brute-forceish
-		conn, err := net.DialTCP("tcp", nil, addr)
+		conn, err := p2pDialer.Dial("tcp", addr.String())
 		if err != nil {
-			return
+			continue
 		}
 		p2pc, err := p2pSetupPeer(addr.String(), conn)
 		if err != nil {
@@ -137,11 +140,9 @@ func (co *p2pCoordinatorType) floodPeersWithNewBlocks(minHeight, maxHeight int) 
 		Msg:    p2pMsgBlockHashes,
 		Hashes: blockHashes,
 	}
-	p2pPeers.lock.With(func() {
-		for p2pc := range p2pPeers.peers {
-			p2pc.chanToPeer <- msg
-		}
-	})
+	for _, p2pc := range p2pPeers.Snapshot() {
+		p2pc.send(msg)
+	}
 }
 
 func (co *p2pCoordinatorType) connectDbPeers() {
