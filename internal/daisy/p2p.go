@@ -98,8 +98,92 @@ type p2pConnection struct {
 	testedConnectable bool // using the default port
 	chainHeight       int
 	refreshTime       time.Time
-	chanToPeer        chan any           // structs go out
 	chanFromPeer      chan util.StrIfMap // StrIfMaps go in
+
+	// Messages waiting to be written to the peer. Anyone (including the connection's own handlers)
+	// may add to it with send() without ever blocking. The handleConnection() loop writes them out.
+	outboxLock  util.WithMutex
+	outbox      []any
+	outboxReady chan struct{} // capacity 1: signals that the outbox is not empty
+}
+
+// Network timeouts. Without them a single stalled peer can stall a whole goroutine forever.
+const (
+	p2pDialTimeout  = 10 * time.Second
+	p2pWriteTimeout = 30 * time.Second
+
+	// A connection whose outbox grows beyond this many messages is not keeping up and is dropped.
+	p2pMaxOutboxLength = 1 << 18
+
+	// The most addresses accepted from a single peer's "my_peers" list
+	p2pMaxPeerAddresses = 16
+)
+
+var p2pDialer = &net.Dialer{Timeout: p2pDialTimeout}
+
+// HTTP client for fetching blocks from peers (the "http" block encoding).
+var p2pHTTPClient = &http.Client{
+	Timeout: 30 * time.Minute, // The whole exchange including the body, blocks can be large
+	Transport: &http.Transport{
+		DialContext:           p2pDialer.DialContext,
+		TLSHandshakeTimeout:   p2pDialTimeout,
+		ResponseHeaderTimeout: 30 * time.Second,
+	},
+}
+
+// send queues a message for sending to the peer. It never blocks, so it is safe to call from
+// anywhere, including from the connection's own message handlers and while holding locks.
+// If the peer is so slow that its outbox overflows, the connection is closed.
+func (p2pc *p2pConnection) send(msg any) {
+	overflow := false
+	p2pc.outboxLock.With(func() {
+		if len(p2pc.outbox) >= p2pMaxOutboxLength {
+			overflow = true
+			return
+		}
+		p2pc.outbox = append(p2pc.outbox, msg)
+	})
+	if overflow {
+		log.Println("Outbox of", p2pc.address, "overflowed, dropping the connection")
+		if p2pc.conn != nil {
+			p2pc.conn.Close()
+		}
+		return
+	}
+	select {
+	case p2pc.outboxReady <- struct{}{}:
+	default: // Already signalled
+	}
+}
+
+// flushOutbox writes all the queued messages to the peer.
+func (p2pc *p2pConnection) flushOutbox() error {
+	for {
+		var msgs []any
+		p2pc.outboxLock.With(func() {
+			msgs = p2pc.outbox
+			p2pc.outbox = nil
+		})
+		if len(msgs) == 0 {
+			return nil
+		}
+		for _, msg := range msgs {
+			if err := p2pc.sendMsg(msg); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// p2pCtrlSend passes a message to the p2p coordinator without ever blocking the caller.
+// The messages are only hints (try to connect to these peers, look for new blocks), so
+// if the coordinator is too busy to take it, it is dropped.
+func p2pCtrlSend(msg p2pCtrlMessage) {
+	select {
+	case p2pCtrlChannel <- msg:
+	default:
+		log.Println("Coordinator is busy, dropping control message", msg.msgType)
+	}
 }
 
 // A set of p2p connections
@@ -123,6 +207,18 @@ func (p *p2pPeersSet) Remove(c *p2pConnection) {
 	p.lock.With(func() {
 		delete(p.peers, c)
 	})
+}
+
+// Snapshot returns the current connections, for callers who need to do something slow with each of them.
+func (p *p2pPeersSet) Snapshot() []*p2pConnection {
+	var peers []*p2pConnection
+	p.lock.With(func() {
+		peers = make([]*p2pConnection, 0, len(p.peers))
+		for peer := range p.peers {
+			peers = append(peers, peer)
+		}
+	})
+	return peers
 }
 
 func (p *p2pPeersSet) HasAddress(address string) bool {
@@ -176,7 +272,7 @@ func (p *p2pPeersSet) tryPeersConnectable() {
 	})
 
 	for paddress, address := range addressesToTry {
-		conn, err := net.Dial("tcp", address)
+		conn, err := p2pDialer.Dial("tcp", address)
 		if err != nil {
 			continue
 		}
@@ -199,33 +295,37 @@ func (p *p2pPeersSet) saveConnectablePeers() {
 	dbPeers := dbGetSavedPeers()
 	localAddresses := util.LocalAddresses()
 
+	// Only collect the addresses under the lock: resolving and the database are too slow to do with it held.
+	var connectable []string
 	p.lock.With(func() {
 		for peer := range p.peers {
-			if !peer.isConnectable {
-				continue
+			if peer.isConnectable {
+				connectable = append(connectable, peer.address)
 			}
-			host, _, err := util.SplitAddress(peer.address)
-			if err != nil {
-				continue
-			}
-			canonicalAddress := fmt.Sprintf("%s:%d", host, DefaultP2PPort)
-			addr, err := net.ResolveTCPAddr("tcp", canonicalAddress)
-			if err != nil {
-				continue
-			}
-			if _, ok := dbPeers[addr.IP.String()]; ok {
-				// Already in db
-				continue
-			}
-			if slices.Contains(localAddresses, addr.String()) {
-				// Local interface
-				continue
-			}
-			log.Println("Detected canonical peer at", canonicalAddress)
-			dbSavePeer(canonicalAddress)
 		}
 	})
 
+	for _, address := range connectable {
+		host, _, err := util.SplitAddress(address)
+		if err != nil {
+			continue
+		}
+		canonicalAddress := fmt.Sprintf("%s:%d", host, DefaultP2PPort)
+		addr, err := net.ResolveTCPAddr("tcp", canonicalAddress)
+		if err != nil {
+			continue
+		}
+		if _, ok := dbPeers[addr.IP.String()]; ok {
+			// Already in db
+			continue
+		}
+		if slices.Contains(localAddresses, addr.String()) {
+			// Local interface
+			continue
+		}
+		log.Println("Detected canonical peer at", canonicalAddress)
+		dbSavePeer(canonicalAddress)
+	}
 }
 
 func p2pServer() {
@@ -269,6 +369,10 @@ func p2pClient() {
 func (p2pc *p2pConnection) sendMsg(msg any) error {
 	bmsg, err := json.Marshal(msg)
 	if err != nil {
+		return err
+	}
+	// A peer which doesn't read must not be able to block us forever
+	if err = p2pc.conn.SetWriteDeadline(time.Now().Add(p2pWriteTimeout)); err != nil {
 		return err
 	}
 	n, err := p2pc.peer.Write(bmsg)
@@ -325,59 +429,66 @@ func (p2pc *p2pConnection) handleConnection() {
 		return
 	}
 	log.Println("Handling connection", p2pc.address)
-	exit := false
+
+	// Closed when this function returns, so the reader goroutine can never get stuck handing over a message
+	quit := make(chan struct{})
+	defer close(quit)
+
+	// toLoop hands a message from the reader goroutine to the loop below. Returns false if the loop is gone.
+	toLoop := func(msg util.StrIfMap) bool {
+		select {
+		case p2pc.chanFromPeer <- msg:
+			return true
+		case <-quit:
+			return false
+		}
+	}
 
 	go func() {
-		var line []byte
 		for {
-			line, err = p2pc.peer.ReadBytes('\n')
+			line, err := p2pc.peer.ReadBytes('\n')
 			if err != nil {
 				log.Println("Error reading data from", p2pc.address, err)
-				p2pc.chanFromPeer <- util.StrIfMap{"_error": "Error reading data"}
+				toLoop(util.StrIfMap{"_error": "Error reading data"})
 				break
 			}
 			var msg util.StrIfMap
-			err = json.Unmarshal(line, &msg)
-			if err != nil {
+			if err = json.Unmarshal(line, &msg); err != nil {
 				log.Println("Cannot parse JSON", strconv.QuoteToASCII(string(line)), "from", p2pc.address)
-				p2pc.chanFromPeer <- util.StrIfMap{"_error": "Cannot parse JSON"}
+				toLoop(util.StrIfMap{"_error": "Cannot parse JSON"})
 				break
 			}
 
-			var root string
-			if root, err = msg.GetString("root"); err != nil {
+			root, err := msg.GetString("root")
+			if err != nil {
 				log.Printf("Problem with chain root from  %v: %v", p2pc.address, err)
-				p2pc.chanFromPeer <- util.StrIfMap{"_error": "Problem with chain root"}
+				toLoop(util.StrIfMap{"_error": "Problem with chain root"})
 				break
 			}
 			if root != chainParams.GenesisBlockHash {
 				log.Printf("Received message from %v for a different chain than mine (%s vs %s). Ignoring.", p2pc.conn, root, chainParams.GenesisBlockHash)
 				continue
 			}
-			p2pc.chanFromPeer <- msg
-		}
-		log.Println("Shutting down receiver for", p2pc.address)
-		exit = true // In any case, if this goroutine exits, we want to shut down everything
-	}()
-
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for !exit {
-		select {
-		case msg := <-p2pc.chanFromPeer:
-			// log.Printf("... chainFromPeer: %s: %s", p2pc.address, util.JSONify(msg))
-			var _error string
-			if _error, err = msg.GetString("_error"); err == nil {
-				log.Printf("Fatal error from %v: %v", p2pc.address, _error)
-				exit = true
+			if !toLoop(msg) {
 				break
 			}
-			var cmd string
-			if cmd, err = msg.GetString("msg"); err != nil {
+		}
+		log.Println("Shutting down receiver for", p2pc.address)
+	}()
+
+	// The message handlers below run in this loop and only ever queue replies with send(), which
+	// cannot block. The replies are written out after each handled message.
+	for {
+		select {
+		case msg := <-p2pc.chanFromPeer:
+			if _error, err := msg.GetString("_error"); err == nil {
+				log.Printf("Fatal error from %v: %v", p2pc.address, _error)
+				return
+			}
+			cmd, err := msg.GetString("msg")
+			if err != nil {
 				log.Printf("Error with msg from %v: %v", p2pc.address, err)
-				exit = true
-				break
+				return
 			}
 			switch cmd {
 			case p2pMsgHello:
@@ -391,18 +502,13 @@ func (p2pc *p2pConnection) handleConnection() {
 			case p2pMsgBlock:
 				p2pc.handleBlock(msg)
 			}
-		case msg := <-p2pc.chanToPeer:
-			err := p2pc.sendMsg(msg)
-			if err != nil {
-				log.Println("Error sending to peer:", err)
-				exit = true
-			}
-		case <-ticker.C:
-			// so the exit variable gets tested
-			continue
+		case <-p2pc.outboxReady:
+		}
+		if err := p2pc.flushOutbox(); err != nil {
+			log.Println("Error sending to peer:", err)
+			return
 		}
 	}
-	// The connection has been dismissed
 }
 
 func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
@@ -424,7 +530,7 @@ func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
 	}
 	var remotePeers []string
 	if remotePeers, err = msg.GetStringList("my_peers"); err == nil {
-		p2pCtrlChannel <- p2pCtrlMessage{msgType: p2pCtrlConnectPeers, payload: remotePeers}
+		p2pCtrlSend(p2pCtrlMessage{msgType: p2pCtrlConnectPeers, payload: remotePeers})
 	}
 	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.address, ver, p2pc.peerID, p2pc.chainHeight)
 	// Check for duplicates
@@ -452,7 +558,7 @@ func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
 	}
 	p2pc.refreshTime = time.Now()
 	if p2pc.chainHeight > dbGetBlockchainHeight() {
-		p2pCtrlChannel <- p2pCtrlMessage{msgType: p2pCtrlSearchForBlocks, payload: p2pc}
+		p2pCtrlSend(p2pCtrlMessage{msgType: p2pCtrlSearchForBlocks, payload: p2pc})
 	}
 }
 
@@ -476,7 +582,7 @@ func (p2pc *p2pConnection) handleGetBlockHashes(msg util.StrIfMap) {
 		Msg:    p2pMsgBlockHashes,
 		Hashes: dbGetHeightHashes(minBlockHeight, maxBlockHeight),
 	}
-	p2pc.chanToPeer <- respMsg
+	p2pc.send(respMsg)
 }
 
 // Handle receiving blockhashes
@@ -514,7 +620,7 @@ func (p2pc *p2pConnection) handleBlockHashes(msg util.StrIfMap) {
 			Msg:   p2pMsgGetBlock,
 			Hash:  hashes[h],
 		}
-		p2pc.chanToPeer <- msg
+		p2pc.send(msg)
 	}
 }
 
@@ -585,7 +691,7 @@ func (p2pc *p2pConnection) handleGetBlock(msg util.StrIfMap) {
 		Data:          msgBlockData,
 		Size:          fileSize,
 	}
-	p2pc.chanToPeer <- respMsg
+	p2pc.send(respMsg)
 	log.Println("*** Sent block", hash, "to", p2pc.address)
 }
 
@@ -663,7 +769,7 @@ func (p2pc *p2pConnection) handleBlock(msg util.StrIfMap) {
 		}
 	} else if encoding == "http" {
 		log.Println("Getting block", hash, "from", dataString)
-		resp, err := http.Get(dataString)
+		resp, err := p2pHTTPClient.Get(dataString)
 		if err != nil {
 			log.Println("Error receiving block at", dataString, err)
 			return
@@ -750,7 +856,7 @@ func p2pConnectPeer(address string) (*p2pConnection, error) {
 		return nil, fmt.Errorf("Refusing to connect to myself at %s", addr.IP)
 	}
 
-	conn, err := net.Dial("tcp", address)
+	conn, err := p2pDialer.Dial("tcp", address)
 	if err != nil {
 		log.Println("Error connecting to", address, err)
 		return nil, err
@@ -764,8 +870,8 @@ func p2pSetupPeer(address string, conn net.Conn) (*p2pConnection, error) {
 	p2pc := p2pConnection{
 		conn:         conn,
 		address:      address,
-		chanToPeer:   make(chan any, 5),
 		chanFromPeer: make(chan util.StrIfMap, 5),
+		outboxReady:  make(chan struct{}, 1),
 	}
 	p2pPeers.Add(&p2pc)
 	return &p2pc, nil

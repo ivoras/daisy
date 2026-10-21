@@ -70,6 +70,16 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
 - **Data directory** (`-dir`, default `~/.daisy`) holds `daisy.db` (chain index, pubkeys, peers),
   `private.db` (private keys, mode 0600), `chainparams.json` (custom chains) and `blocks/`.
 
+## P2P concurrency rules
+
+- Message handlers (`handleMsgHello`, `handleBlockHashes`, ...) run inside the connection's own
+  `handleConnection` loop. They must reply with `p2pc.send()`, which only appends to an unbounded
+  (but capped) outbox and never blocks; the loop writes it out after each handled message. Never send to
+  a channel that the same goroutine is the only reader of.
+- Never block while holding `p2pPeers.lock`: use `p2pPeers.Snapshot()` and work on the copy.
+- Never block on the coordinator: use `p2pCtrlSend()` (drops the hint if the coordinator is busy).
+- Every network operation needs a timeout: `p2pDialer`, `p2pHTTPClient`, and the write deadline in `sendMsg`.
+
 ## Known problems (not yet fixed)
 
 These were found in a review and are tracked here so they aren't mistaken for intended behaviour:
@@ -81,9 +91,7 @@ These were found in a review and are tracked here so they aren't mistaken for in
   resolves signing keys against the final key set rather than the set at that height.
 - No fork handling: a block at an existing height is rejected ("longest chain wins" is not implemented).
 - P2P: peer-supplied `http` block URLs are fetched without restriction (SSRF), block/line sizes are
-  unbounded, there are no dial timeouts, and `badPeers` matching for inbound connections includes the
-  ephemeral source port. Several channel/lock interactions in `p2p.go`/`p2pcoordinator.go` can deadlock,
-  and `handleConnection` shares `exit`/`err` between goroutines without synchronisation.
+  unbounded, and `badPeers` matching for inbound connections includes the ephemeral source port.
 - `mining.CountStartZeroBits` counts zero bits across all bytes rather than only leading ones (the PoW
   code is unused).
 - `cfg.httpPort` is unexported, so `http_port` in the JSON config file is silently ignored.
