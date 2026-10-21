@@ -356,10 +356,20 @@ func TestOutboxInterleavesBlocksAndMessages(t *testing.T) {
 	}
 }
 
+// moveSelfInfoClock makes selfInfo see the given time, until the test is over
+func moveSelfInfoClock(t *testing.T, now *time.Time) {
+	t.Helper()
+	old := selfInfoClock
+	selfInfoClock = func() time.Time { return *now }
+	t.Cleanup(func() { selfInfoClock = old })
+}
+
 func TestSelfInfo(t *testing.T) {
-	s := &selfInfoType{observed: make(map[string]map[string]bool), reachable: make(map[string]bool)}
+	now := time.Now()
+	moveSelfInfoClock(t, &now)
+	s := newSelfInfo()
 	s.observe("198.51.100.7", "peer1")
-	if s.seenAs() != "" || s.isSelf("198.51.100.7") {
+	if s.seenAs() != "" {
 		t.Error("one peer is not enough to believe")
 	}
 	s.observe("198.51.100.7", "peer1") // The same peer again
@@ -367,32 +377,37 @@ func TestSelfInfo(t *testing.T) {
 		t.Error("the same peer counted twice")
 	}
 	s.observe("198.51.100.7", "peer2")
-	if s.seenAs() != "198.51.100.7" || !s.isSelf("198.51.100.7") {
+	if s.seenAs() != "198.51.100.7" {
 		t.Error("two peers agree")
+	}
+	if s.isSelf("198.51.100.7") {
+		t.Error("what the peers say must not decide whom we dial")
 	}
 	s.observe("not an address", "peer3")
 	s.observe("203.0.113.99", "peer3") // A peer which disagrees
-	if s.isSelf("203.0.113.99") {
+	if s.seenAs() != "198.51.100.7" {
 		t.Error("a single peer's claim was believed")
 	}
+	// A peer host has one vote overall: a new opinion replaces the old one
+	s.observe("203.0.113.99", "peer2")
+	if s.seenAs() != "203.0.113.99" {
+		t.Errorf("peer2 has changed its mind and now agrees with peer3, but the quorum is at %q", s.seenAs())
+	}
+	s.observe("203.0.113.99", "peer1")
+	s.observe("203.0.113.99", "peer3")
+	for _, n := range s.observed {
+		if n.seenAs != "203.0.113.99" {
+			t.Error("a peer host has votes for several addresses")
+		}
+	}
 	// The data kept about the peers is bounded
-	for i := 0; i < 100; i++ {
-		s.observe(fmt.Sprintf("10.0.0.%d", i), "peer1")
+	for i := 0; i < 1000; i++ {
+		s.observe("198.51.100.1", fmt.Sprintf("host%d", i))
+		s.confirmReachable(fmt.Sprintf("host%d", i))
+		s.addSelfHost(fmt.Sprintf("10.1.%d.%d", i/200, i%200))
 	}
-	if len(s.observed) > selfInfoMaxHosts {
-		t.Errorf("%d addresses are remembered", len(s.observed))
-	}
-	if s.isReachable() {
-		t.Error("nobody has connected to us")
-	}
-	s.confirmReachable("peer1")
-	s.confirmReachable("peer1")
-	if s.isReachable() {
-		t.Error("one peer is not enough")
-	}
-	s.confirmReachable("peer2")
-	if !s.isReachable() {
-		t.Error("two peers have connected to us")
+	if len(s.observed) > selfInfoMaxVotes || len(s.reachable) > selfInfoMaxVotes || len(s.selfHosts) > selfInfoMaxHosts {
+		t.Errorf("too much is remembered: %d, %d, %d", len(s.observed), len(s.reachable), len(s.selfHosts))
 	}
 	s.setExternal("192.0.2.5")
 	if !s.isSelf("192.0.2.5") {
@@ -404,9 +419,93 @@ func TestSelfInfo(t *testing.T) {
 	}
 }
 
+func TestSelfInfoVotesExpire(t *testing.T) {
+	now := time.Now()
+	moveSelfInfoClock(t, &now)
+	s := newSelfInfo()
+	s.observe("198.51.100.7", "peer1")
+	s.observe("198.51.100.7", "peer2")
+	s.confirmReachable("peer1")
+	s.confirmReachable("peer2")
+	if s.seenAs() == "" || !s.isReachable() {
+		t.Fatal("two peers agree")
+	}
+	now = now.Add(selfInfoVoteTTL / 2)
+	s.observe("198.51.100.7", "peer2") // A peer which repeats its opinion keeps it alive
+	now = now.Add(selfInfoVoteTTL/2 + time.Second)
+	if s.seenAs() != "" || s.isReachable() {
+		t.Error("the votes of peer1 have expired, so there is no quorum")
+	}
+	s.confirmReachable("peer1")
+	if s.isReachable() {
+		t.Error("peer2's confirmation is old")
+	}
+	s.confirmReachable("peer2")
+	if !s.isReachable() {
+		t.Error("two fresh confirmations")
+	}
+
+	// The addresses where we found ourselves are forgotten after a while, too
+	s.addSelfHost("203.0.113.5")
+	if !s.isSelf("203.0.113.5") {
+		t.Error("a connection to this address came back to us")
+	}
+	now = now.Add(selfInfoSelfHostTTL + time.Second)
+	if s.isSelf("203.0.113.5") {
+		t.Error("the address is still ours after the time is up")
+	}
+}
+
+// Peers can't make us stop dialing an honest address by voting for it
+func TestVotesDontDecideWhomWeDial(t *testing.T) {
+	setupTestSysDbs(t)
+	drainCtrl()
+	selfInfo.lock.With(func() { selfInfo.observed = make(map[string]selfVote) })
+	defer selfInfo.lock.With(func() { selfInfo.observed = make(map[string]selfVote) })
+	honest := "203.0.113.77"
+
+	// Two peers which have connected to us say that they see us at the address of an honest node
+	for i, host := range []string{"192.0.2.10", "192.0.2.11"} {
+		local, remote := net.Pipe()
+		defer local.Close()
+		defer remote.Close()
+		p2pc := newTestConnection(&fakeAddrConn{Conn: local, remote: host + ":40000"}, host+":40000")
+		hello := helloMsg(9100+i, 0, "", 0)
+		hello["observed_host"] = honest
+		p2pc.handleMsgHello(hello)
+		if !p2pc.handshaken {
+			t.Fatal("the hello was not accepted")
+		}
+	}
+	if len(selfInfo.observed) != 0 {
+		t.Error("inbound peers have voted about our address")
+	}
+	if selfInfo.isSelf(honest) {
+		t.Fatal("the honest address is believed to be ours")
+	}
+
+	// Even if outbound peers say it (we chose them, but they can be run by whoever), it's only informational
+	for i, host := range []string{"192.0.2.12", "192.0.2.13"} {
+		local, remote := net.Pipe()
+		defer local.Close()
+		defer remote.Close()
+		p2pc := newTestConnection(&fakeAddrConn{Conn: local, remote: host + ":2017"}, host+":2017")
+		p2pc.outbound = true
+		hello := helloMsg(9200+i, 0, "", 0)
+		hello["observed_host"] = honest
+		p2pc.handleMsgHello(hello)
+	}
+	if selfInfo.seenAs() != honest {
+		t.Error("two peers we dialed agree, so the status shows the address")
+	}
+	if selfInfo.isSelf(honest) {
+		t.Fatal("the honest address is believed to be ours")
+	}
+}
+
 func TestReachableMessage(t *testing.T) {
-	selfInfo.lock.With(func() { selfInfo.reachable = make(map[string]bool) })
-	defer selfInfo.lock.With(func() { selfInfo.reachable = make(map[string]bool) })
+	selfInfo.lock.With(func() { selfInfo.reachable = make(map[string]time.Time) })
+	defer selfInfo.lock.With(func() { selfInfo.reachable = make(map[string]time.Time) })
 	for _, host := range []string{"192.0.2.1", "192.0.2.2"} {
 		local, remote := net.Pipe()
 		defer local.Close()
@@ -418,7 +517,7 @@ func TestReachableMessage(t *testing.T) {
 		t.Error("two peers have said that they have connected to us")
 	}
 	// A port which is not the one that peers look for doesn't count
-	selfInfo.lock.With(func() { selfInfo.reachable = make(map[string]bool) })
+	selfInfo.lock.With(func() { selfInfo.reachable = make(map[string]time.Time) })
 	local, remote := net.Pipe()
 	defer local.Close()
 	defer remote.Close()
@@ -426,6 +525,22 @@ func TestReachableMessage(t *testing.T) {
 	p2pc.handleReachable(util.StrIfMap{"port": float64(1234)})
 	if len(selfInfo.reachable) != 0 {
 		t.Error("the wrong port was counted")
+	}
+}
+
+// One host that sends "reachable" on many connections counts once
+func TestReachableOncePerHost(t *testing.T) {
+	selfInfo.lock.With(func() { selfInfo.reachable = make(map[string]time.Time) })
+	defer selfInfo.lock.With(func() { selfInfo.reachable = make(map[string]time.Time) })
+	for i := 0; i < 5; i++ {
+		local, remote := net.Pipe()
+		defer local.Close()
+		defer remote.Close()
+		p2pc := newTestConnection(&fakeAddrConn{Conn: local, remote: fmt.Sprintf("192.0.2.1:%d", 40000+i)}, "192.0.2.1:40000")
+		p2pc.handleReachable(util.StrIfMap{"port": float64(DefaultP2PPort)})
+	}
+	if selfInfo.isReachable() || len(selfInfo.reachable) != 1 {
+		t.Error("one host has confirmed that we are reachable several times")
 	}
 }
 

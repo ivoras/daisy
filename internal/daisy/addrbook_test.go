@@ -589,7 +589,7 @@ func TestConnectionToMyselfIsForgotten(t *testing.T) {
 	if !selfInfo.isSelf("203.0.113.44") {
 		t.Error("the address should be known to be ours")
 	}
-	selfInfo.lock.With(func() { selfInfo.selfHosts = make(map[string]bool) })
+	selfInfo.lock.With(func() { selfInfo.selfHosts = make(map[string]time.Time) })
 	if p2pPeers.HasAddress("203.0.113.44:2017") {
 		t.Error("left in the peers")
 	}

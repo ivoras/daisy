@@ -22,7 +22,7 @@ const p2pClientVersionString = "godaisy/0.3"
 type p2pMsgHeader struct {
 	Root  string `json:"root"`
 	Msg   string `json:"msg"`
-	P2pID int64  `json:"p2p_id"`
+	P2pID int64  `json:"p2p_id,omitempty"` // Only in the hello
 }
 
 // The hello message
@@ -348,8 +348,30 @@ func (p *p2pPeersSet) CountInboundFrom(host string) int {
 // markHandshaken records that the peer has said hello. If we have connected to the peer using the default port,
 // that also tells that others can connect to it.
 func (p *p2pPeersSet) markHandshaken(c *p2pConnection) {
-	c.ready.Store(true)
+	p.handshake(c, c.peerID)
+}
+
+// handshake records the ID which the peer has claimed in its hello and marks the connection as handshaken, unless it
+// is a duplicate: an already handshaken connection from the same host claims the same ID, which is what the second
+// connection of one node looks like. The ID is not proof of anything (anybody can claim any ID), so a connection is
+// only a duplicate of one from the same IP address, and all that is done about it is that the newer one is dropped by the
+// caller; no address is banned.
+func (p *p2pPeersSet) handshake(c *p2pConnection, id int64) (duplicate bool) {
 	p.lock.With(func() {
+		c.peerID = id
+		if c.host == "" && c.conn != nil {
+			c.host, _ = remoteHost(c.conn.RemoteAddr())
+		}
+		if c.host != "" {
+			for other := range p.peers {
+				if other != c && other.handshaken && other.peerID == id && other.host == c.host {
+					log.Printf("%v looks like a second connection of %v (%x), dropping it.", c.address, other.address, id)
+					duplicate = true
+					return
+				}
+			}
+		}
+		c.ready.Store(true)
 		c.handshaken = true
 		if c.outbound {
 			if _, port, err := util.SplitAddress(c.address); err == nil && port == DefaultP2PPort {
@@ -357,6 +379,7 @@ func (p *p2pPeersSet) markHandshaken(c *p2pConnection) {
 			}
 		}
 	})
+	return duplicate
 }
 
 func (p *p2pPeersSet) HasAddress(address string) bool {
@@ -432,10 +455,9 @@ func (p *p2pPeersSet) tryPeersConnectable() {
 		}
 		// Let the peer know that we have been able to connect to it, which is not something that it can find out
 		c.peer.send(p2pMsgReachableStruct{
-			P2pID: p2pEphemeralID,
-			Root:  chainParams.GenesisBlockHash,
-			Msg:   p2pMsgReachable,
-			Port:  DefaultP2PPort,
+			Root: chainParams.GenesisBlockHash,
+			Msg:  p2pMsgReachable,
+			Port: DefaultP2PPort,
 		})
 	}
 }
@@ -575,12 +597,10 @@ func (p2pc *p2pConnection) handleConnection() {
 	// XXX: the state machine shouldn't start by the listener sending something
 	// (security best practices)
 	helloMsg := p2pMsgHelloStruct{
-		P2pID:       p2pEphemeralID,
-		Root:        chainParams.GenesisBlockHash,
-		Msg:         p2pMsgHello,
-		Version:     p2pClientVersionString,
-		ChainHeight: dbGetBlockchainHeight(),
-		MyPeers:     p2pPeers.GetAddresses(true),
+		p2pMsgHeader: p2pMsgHeader{P2pID: p2pEphemeralID, Root: chainParams.GenesisBlockHash, Msg: p2pMsgHello},
+		Version:      p2pClientVersionString,
+		ChainHeight:  dbGetBlockchainHeight(),
+		MyPeers:      p2pPeers.GetAddresses(true),
 
 		Protocol:    p2pProtocolVersion,
 		MinProtocol: p2pMinProtocolVersion,
@@ -698,7 +718,7 @@ func (p2pc *p2pConnection) handleConnection() {
 		case <-ticker.C:
 			p2pc.expireIncomingBlocks()
 			if p2pc.handshaken {
-				p2pc.send(p2pMsgPingStruct{P2pID: p2pEphemeralID, Root: chainParams.GenesisBlockHash, Msg: p2pMsgPing})
+				p2pc.send(p2pMsgPingStruct{Root: chainParams.GenesisBlockHash, Msg: p2pMsgPing})
 				p2pc.continueSync()
 			}
 		case <-p2pc.outboxReady:
@@ -728,7 +748,8 @@ func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
 		p2pc.conn.Close()
 		return
 	}
-	if p2pc.peerID, err = msg.GetInt64("p2p_id"); err != nil {
+	peerID, err := msg.GetInt64("p2p_id")
+	if err != nil {
 		log.Println(p2pc.address, err)
 		p2pc.conn.Close()
 		return
@@ -749,56 +770,44 @@ func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
 		return
 	}
 	p2pc.protocol.Store(int32(protocol))
-	if seenAs, err := msg.GetString("observed_host"); err == nil {
-		if peerHost, err := remoteHost(p2pc.conn.RemoteAddr()); err == nil {
-			selfInfo.observe(seenAs, peerHost)
-		}
-	}
-	var remotePeers []string
-	if remotePeers, err = msg.GetStringList("my_peers"); err == nil {
-		if peerHost, err := remoteHost(p2pc.conn.RemoteAddr()); err == nil {
-			// A peer on a private network may tell about its neighbours, others may not
-			p2pCtrlSend(p2pCtrlMessage{msgType: p2pCtrlConnectPeers, payload: p2pConnectPeersRequest{
-				addresses: remotePeers, source: peerHost, allowPrivate: isPrivateHost(peerHost)}})
-		}
-	}
-	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.address, ver, p2pc.peerID, p2pc.chainHeight)
-	// Check for duplicates
-	dup := false
-	p2pPeers.lock.With(func() {
-		for p := range p2pPeers.peers {
-			if p.peerID == p2pc.peerID && p != p2pc {
-				log.Printf("%v looks like a duplicate of %v (%x), dropping it.", p2pc.address, p.address, p2pc.peerID)
-				dup = true
-				return
-			}
-		}
-	})
-	if p2pc.peerID == p2pEphemeralID {
-		log.Printf("%v is apparently myself (%x). Dropping it.", p2pc.conn, p2pc.peerID)
-		dup = true
-		if host, err := remoteHost(p2pc.conn.RemoteAddr()); err == nil && p2pc.outbound {
-			selfInfo.addSelfHost(host)
+	peerHost, hostErr := remoteHost(p2pc.conn.RemoteAddr())
+
+	// The ID is only good for finding out that we have connected to ourselves. Anyone can claim any ID (all our messages
+	// have told it), so a connection which claims our ID is dropped, and what is forgotten is its own address, nobody else's.
+	if peerID == p2pEphemeralID {
+		log.Printf("%v is apparently myself (%x). Dropping it.", p2pc.address, peerID)
+		if hostErr == nil && p2pc.outbound {
+			selfInfo.addSelfHost(peerHost)
+			p2pCoordinator.badPeers.Add(p2pc.address) // The address that we dialed, which is the one that claimed to be us
 			if p2pc.savedAddress != "" {
 				abForget(p2pc.savedAddress)
 			}
 		}
-	}
-	if dup {
-		if p2pc.outbound {
-			// Remember the address we dialed so that we don't keep dialing it. For inbound connections
-			// the address has a random source port which says nothing about the peer.
-			p2pCoordinator.badPeers.Add(p2pc.address)
-		}
-		err = p2pc.conn.Close()
-		if err != nil {
+		if err = p2pc.conn.Close(); err != nil {
 			log.Printf("p2pc.conn.Close: %v", err)
 		}
 		return
 	}
-	p2pc.refreshTime = time.Now()
-	p2pPeers.markHandshaken(p2pc)
+	// Two connections of the same node: the newer one is dropped, which doesn't say anything bad about the peer
+	if p2pPeers.handshake(p2pc, peerID) {
+		if err = p2pc.conn.Close(); err != nil {
+			log.Printf("p2pc.conn.Close: %v", err)
+		}
+		return
+	}
 	p2pc.setReadDeadline(p2pIdleTimeout)
+
+	// What the peer says about us counts only if we have chosen the peer, and only once per peer host
+	if seenAs, err := msg.GetString("observed_host"); err == nil && p2pc.outbound && hostErr == nil {
+		selfInfo.observe(seenAs, peerHost)
+	}
+	if remotePeers, err := msg.GetStringList("my_peers"); err == nil && hostErr == nil {
+		// A peer on a private network may tell about its neighbours, others may not
+		p2pCtrlSend(p2pCtrlMessage{msgType: p2pCtrlConnectPeers, payload: p2pConnectPeersRequest{
+			addresses: remotePeers, source: peerHost, allowPrivate: isPrivateHost(peerHost)}})
+	}
+	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.address, ver, peerID, p2pc.chainHeight)
+	p2pc.refreshTime = time.Now()
 	if p2pc.outbound && p2pc.savedAddress != "" {
 		// A real peer of our chain: only now it's worth remembering
 		abGood(p2pc.savedAddress)
@@ -839,10 +848,9 @@ func (p2pc *p2pConnection) requestBlock(hash string) {
 	log.Println("Requesting block", hash)
 	p2pc.noteRequested(hash)
 	p2pc.send(p2pMsgGetBlockStruct{
-		P2pID: p2pEphemeralID,
-		Root:  chainParams.GenesisBlockHash,
-		Msg:   p2pMsgGetBlock,
-		Hash:  hash,
+		Root: chainParams.GenesisBlockHash,
+		Msg:  p2pMsgGetBlock,
+		Hash: hash,
 	})
 }
 

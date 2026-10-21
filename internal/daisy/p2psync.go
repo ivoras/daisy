@@ -123,7 +123,6 @@ func (s *syncState) allowed(height, myHeight int, now time.Time) bool {
 func (p2pc *p2pConnection) sendGetBlockHashes(r hashRange) {
 	log.Printf("Searching for blocks from %d to %d at %s", r.min, r.max, p2pc.address)
 	p2pc.send(p2pMsgGetBlockHashesStruct{
-		P2pID:          p2pEphemeralID,
 		Root:           chainParams.GenesisBlockHash,
 		Msg:            p2pMsgGetBlockHashes,
 		MinBlockHeight: r.min,
@@ -184,7 +183,6 @@ func (p2pc *p2pConnection) handleGetBlockHashes(msg util.StrIfMap) {
 	r := clampHashRange(minBlockHeight, maxBlockHeight)
 	log.Printf("*** Sending block hashes from %d to %d to %s", r.min, r.max, p2pc.address)
 	p2pc.send(p2pMsgBlockHashesStruct{
-		P2pID:  p2pEphemeralID,
 		Root:   chainParams.GenesisBlockHash,
 		Msg:    p2pMsgBlockHashes,
 		Hashes: dbGetHeightHashes(r.min, r.max),

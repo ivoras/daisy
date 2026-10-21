@@ -7,7 +7,7 @@ know are ignored, which is how most additions are made compatible. Every message
 |----------|--------------------------------------------------------------------------------------------|
 | `root`   | the hash of the genesis block of the chain; messages for another chain are ignored         |
 | `msg`    | the type of the message                                                                    |
-| `p2p_id` | the random ID of the sending node (made when the process starts)                           |
+| `p2p_id` | the random ID of the sending node (made when the process starts). Only in `hello`, the other messages leave it out |
 
 ## Versions and the handshake
 
@@ -19,6 +19,11 @@ A connection which hasn't sent a valid hello within 20 seconds is closed. After 
 least every 5 minutes (the read deadline is moved with every message; it applies to a whole message, so sending a few bytes
 now and then doesn't help). Nodes send each other a `ping` every 30 seconds, so a healthy peer with nothing to say is not
 dropped; a peer which sends nothing for 5 minutes is.
+
+The `p2p_id` of the `hello` is not proof of anything: everybody who has connected to a node knows its ID and can claim it. A node
+uses it only to find out that it has connected to itself (the connection is closed; if it was the node that dialed, that address
+is avoided and forgotten), and to drop the newer one of two connections which come from the same IP address and claim the same
+ID. Nobody is banned for a claimed ID, and a connection from another IP address is never dropped because of one.
 
 A host can have at most 4 inbound connections to a node at the same time, and a node accepts at most 128 inbound connections.
 
@@ -116,4 +121,8 @@ peers that this node has talked to, as `{"peers": [...]}`) and `/status` (the st
 * **Local network** (`-mdns`): the nodes advertise `_daisy._tcp` with the genesis hash in the TXT record.
 * **NAT** (`-upnp`): UPnP or NAT-PMP is used to ask the router to forward the p2p and HTTP ports. Without it, a node behind a NAT
   works by connecting to others, but nobody can connect to it. Peers tell the node which address they see it at
-  (`observed_host`) and whether they could connect to it (`reachable`); when two peers agree, `/status` shows it.
+  (`observed_host`) and whether they could connect to it (`reachable`); when two peers agree, `/status` shows it. This is
+  informational only: `observed_host` is taken only from the hello of a connection which the node itself made, each peer host
+  has one vote (a new one replaces the old), `reachable` is counted once per host, and votes expire after an hour. What the
+  peers say never stops the node from connecting to an address. That is decided only by the router's address (when a port is
+  mapped) and by the addresses at which a connection of the node has come back to itself.

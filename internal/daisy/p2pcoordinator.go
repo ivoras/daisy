@@ -210,7 +210,6 @@ func (co *p2pCoordinatorType) floodPeersWithNewBlocks(minHeight, maxHeight int) 
 	minHeight = max(minHeight, maxHeight-p2pMaxBlockHashes+1)
 	blockHashes := dbGetHeightHashes(minHeight, maxHeight)
 	msg := p2pMsgBlockHashesStruct{
-		P2pID:  p2pEphemeralID,
 		Root:   chainParams.GenesisBlockHash,
 		Msg:    p2pMsgBlockHashes,
 		Hashes: blockHashes,
