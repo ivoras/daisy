@@ -288,6 +288,7 @@ func TestSecondHelloIsIgnored(t *testing.T) {
 	defer local.Close()
 	defer remote.Close()
 	p2pc := newTestConnection(&fakeAddrConn{Conn: local, remote: "192.0.2.50:40000"}, "192.0.2.50:40000")
+	p2pc.outbound = true // Only the peers which we have chosen get to vote
 
 	hello := helloMsg(5001, 3, "", 0)
 	hello["my_peers"] = []any{"198.51.100.77"}
@@ -305,7 +306,10 @@ func TestSecondHelloIsIgnored(t *testing.T) {
 	if !p2pc.handshaken || connectRequests() != 1 {
 		t.Fatal("the first hello was not processed")
 	}
-	selfInfo.lock.With(func() { selfInfo.observed = make(map[string]map[string]bool) })
+	if len(selfInfo.observed) != 1 {
+		t.Error("the hello of a peer we have connected to hasn't voted")
+	}
+	selfInfo.lock.With(func() { selfInfo.observed = make(map[string]selfVote) })
 
 	second := helloMsg(5002, 99, "", 0)
 	second["my_peers"] = []any{"198.51.100.78"}

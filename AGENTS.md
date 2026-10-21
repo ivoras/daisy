@@ -74,8 +74,11 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
 - `nat.go` (UPnP/NAT-PMP, `-upnp`) and `mdns.go` (`-mdns`) are opt-in and start from `run.go`; `nat.go` talks to the
   router through the `portMapper` interface so it's tested with a fake. `DAISY_TEST_MDNS=1` enables a test that needs
   a network with multicast.
-- `selfInfo` is what peers tell us about ourselves (the address they see, whether they could connect). It needs a
-  quorum of different peers before it's believed, and it's only informational or used to avoid connecting to ourselves.
+- `selfInfo` is what peers tell us about ourselves (the address they see, whether they could connect) and is purely
+  informational (`/status`). `observed_host` is taken only from the hello of connections we dialed, one vote per peer host
+  (a new vote replaces the old), votes expire after an hour, and the maps are bounded; `reachable` counts distinct hosts and
+  expires the same way. Peers' votes never decide whom we dial: `isSelf()` is true only for the NAT `external` address and
+  for `selfHosts`, addresses where a connection we dialed came back to us (also expiring, and an attacker can only add its own).
 
 ## Block tree and fork choice
 
@@ -143,13 +146,18 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
 - Block files are arbitrary SQLite databases from the network. Open them only through `dbOpen(file, true)` (the
   `sqlite3_block` driver in `blockdb.go`: `mode=ro`, `query_only`, `trusted_schema=OFF`, lowered limits, escaped DSN),
   never with `sql.Open("sqlite3", ...)`. `OpenBlockFile`, `readKeyOps` and `readBlockTimestamp` check that `_meta` and
-  `_keys` are real tables (`dbCheckBlockTables`); `acceptBlockLocked` also runs `Block.QuickCheck` (`PRAGMA quick_check`);
-  reads of `_meta`/`_keys` have a time limit and `_keys` is capped at `maxBlockKeyOps`. Don't read user tables or run
-  user SQL on a block while holding `chainLock` (`daisy query` is the only place that runs SQL over blocks, and it
-  doesn't hold it). go-sqlite3 doesn't expose `SQLITE_DBCONFIG_DEFENSIVE`; it only matters for writable connections.
-- Bans: `badPeers` holds dialed `ip:port` addresses (set for outbound duplicate/self connections),
-  `badHosts` holds IPs which violated the protocol (oversized or malformed messages). Inbound connections have
+  `_keys` are real tables (`dbCheckBlockTables`); `acceptBlockLocked` also runs `Block.QuickCheck` (`PRAGMA quick_check`),
+  only after the block's signatures are valid; reads of `_meta`/`_keys` have a time limit and `_keys` is capped at
+  `maxBlockKeyOps`. Don't read user tables or run user SQL on a block while holding `chainLock` (`daisy query` is the only
+  place that runs SQL over blocks, and it doesn't hold it). go-sqlite3 doesn't expose `SQLITE_DBCONFIG_DEFENSIVE`; it only
+  matters for writable connections.
+- Bans: `badPeers` holds dialed `ip:port` addresses (set for outbound self connections and for peers whose protocol version
+  is incompatible), `badHosts` holds IPs which violated the protocol (oversized or malformed messages). Inbound connections have
   random source ports, so never key a ban on an inbound connection's `ip:port`.
+- `p2p_id` is only sent in `hello`, and anybody can claim any ID. It is used for exactly two things: a hello with our own ID
+  is a connection to ourselves (it is dropped and, if we dialed it, only that address is avoided), and a connection from the
+  same IP address as an already handshaken one with the same ID is dropped as a second connection of the node
+  (`p2pPeersSet.handshake`). Nothing is ever banned because of a claimed ID, and a claimed ID never affects another IP's connection.
 
 ## Known problems (not yet fixed)
 

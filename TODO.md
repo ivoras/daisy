@@ -101,17 +101,19 @@ Order of work: 1) P2P resource limits (#5–#8, #12, #13), 2) peer management an
 
 ## Eclipse and peer management
 
-- [ ] **#10 A peer can get an honest peer banned by claiming its ID (medium-high).**
+- [x] **#10 A peer can get an honest peer banned by claiming its ID (medium-high).**
   Every message we send carries `p2p_id`, so anyone can learn any node's ID. An attacker connects first claiming
   honest node H's ID; when we dial H, `handleMsgHello` treats H as the duplicate and puts its address in `badPeers`
   for 15 minutes. Fix: use the ID only to detect connections to ourselves, never to ban anyone else; if
   deduplication stays, close the newer connection without banning.
+  *Done:* `p2p_id` is only sent in `hello` and only identifies ourselves; duplicates are dropped only from the same IP, without a ban.
 
-- [ ] **#11 Two IPs can make us shun honest peers (medium).**
+- [x] **#11 Two IPs can make us shun honest peers (medium).**
   `selfInfo.observe`: with two IPs an attacker can make us believe we are at honest peer X's address, so
   `isSelf(X)` is true and we never dial X; up to 16 addresses. Votes never expire, so the first 16 claimed addresses
   stay forever. Fix: take `observed_host` only from outbound, handshaken peers; one vote per peer host overall;
   expire entries; don't use it in `isSelf` for dialing.
+  *Done:* votes only from dialed peers, one per host, 1 h expiry, bounded; `isSelf` uses only `selfHosts` and the NAT address.
 
 - [x] **#12 Repeated hellos are processed every time (low).**
   Each hello re-submits `my_peers`, adds observation votes and can change the claimed protocol. Process only the

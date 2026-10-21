@@ -215,7 +215,6 @@ func (s *blockSender) nextMessage() (any, bool, error) {
 			return nil, true, err
 		}
 		return p2pMsgBlockStruct{
-			P2pID:         p2pEphemeralID,
 			Root:          chainParams.GenesisBlockHash,
 			Msg:           p2pMsgBlock,
 			Hash:          s.hash,
@@ -250,7 +249,6 @@ func (s *blockSender) nextMessage() (any, bool, error) {
 		return nil, true, err
 	}
 	msg := p2pMsgBlockChunkStruct{
-		P2pID: p2pEphemeralID,
 		Root:  chainParams.GenesisBlockHash,
 		Msg:   p2pMsgBlockChunk,
 		Hash:  s.hash,
@@ -529,15 +527,31 @@ func base64Decode(s string) ([]byte, error) {
  * What the node knows about itself from what the peers tell.
  */
 
+// What the peers tell us is only informational (the status endpoint), they can lie. What decides whom we dial is what we have
+// found out ourselves: the router's address when we have a port mapped (external), and the addresses at which a connection
+// that we made came back to us (selfHosts).
 type selfInfoType struct {
 	lock      util.WithMutex
-	observed  map[string]map[string]bool // The address that peers see us at -> the peers (their hosts) that have said so
-	reachable map[string]bool            // The peers (their hosts) that have connected to our p2p port
-	external  string                     // The address of the router, if we have got a port mapped on it
-	selfHosts map[string]bool            // The addresses at which we have found ourselves, by connecting to them
+	observed  map[string]selfVote  // Peer host -> the address it says it sees us at. One vote per peer host
+	reachable map[string]time.Time // Peer host -> when it said that it has connected to our p2p port
+	external  string               // The address of the router, if we have got a port mapped on it
+	selfHosts map[string]time.Time // The addresses at which we have found ourselves, by connecting to them -> when
 }
 
-var selfInfo = selfInfoType{observed: make(map[string]map[string]bool), reachable: make(map[string]bool), selfHosts: make(map[string]bool)}
+// An opinion of a peer about our address
+type selfVote struct {
+	seenAs string
+	at     time.Time
+}
+
+func newSelfInfo() selfInfoType {
+	return selfInfoType{observed: make(map[string]selfVote), reachable: make(map[string]time.Time), selfHosts: make(map[string]time.Time)}
+}
+
+var selfInfo = newSelfInfo()
+
+// selfInfoClock is the clock of selfInfo, a variable so that the tests can move time
+var selfInfoClock = time.Now
 
 const (
 	// How many peers need to agree before we believe something about ourselves
@@ -545,78 +559,123 @@ const (
 
 	// The bounds of the data kept about the peers, whatever they say
 	selfInfoMaxHosts = 16
-	selfInfoMaxVotes = 16
+	selfInfoMaxVotes = 64
+
+	// How long a vote of a peer counts. A peer which still has the same opinion repeats it with every new connection.
+	selfInfoVoteTTL = time.Hour
+
+	// How long an address stays known to be ours
+	selfInfoSelfHostTTL = time.Hour
 )
 
-// observe records that the peer says it sees us at the given address
+// observe records that the peer says it sees us at the given address. A peer host has one vote: a new one replaces
+// the old. Only to be called for the hello of a peer that we have connected to.
 func (s *selfInfoType) observe(seenAs, peerHost string) {
 	if net.ParseIP(seenAs) == nil || peerHost == "" {
 		return
 	}
 	s.lock.With(func() {
-		voters, ok := s.observed[seenAs]
-		if !ok {
-			if len(s.observed) >= selfInfoMaxHosts {
+		now := selfInfoClock()
+		if _, ok := s.observed[peerHost]; !ok && len(s.observed) >= selfInfoMaxVotes {
+			for host, v := range s.observed {
+				if now.Sub(v.at) > selfInfoVoteTTL {
+					delete(s.observed, host)
+				}
+			}
+			if len(s.observed) >= selfInfoMaxVotes {
 				return
 			}
-			voters = make(map[string]bool)
-			s.observed[seenAs] = voters
 		}
-		if len(voters) < selfInfoMaxVotes {
-			voters[peerHost] = true
-		}
+		s.observed[peerHost] = selfVote{seenAs: seenAs, at: now}
 	})
 }
 
-// seenAs returns the address which most of the peers see us at, or "" if they don't agree
+// seenAs returns the address which most of the peers see us at, or "" if they don't agree. Informational.
 func (s *selfInfoType) seenAs() string {
 	best, bestVotes := "", 0
 	s.lock.With(func() {
-		for host, voters := range s.observed {
-			if len(voters) >= selfInfoQuorum && len(voters) > bestVotes {
-				best, bestVotes = host, len(voters)
+		now := selfInfoClock()
+		counts := make(map[string]int)
+		for _, v := range s.observed {
+			if now.Sub(v.at) <= selfInfoVoteTTL {
+				counts[v.seenAs]++
+			}
+		}
+		for host, n := range counts {
+			if n >= selfInfoQuorum && (n > bestVotes || (n == bestVotes && host < best)) {
+				best, bestVotes = host, n
 			}
 		}
 	})
 	return best
 }
 
-// isSelf tells if the address is one of those we are known by from the outside
+// isSelf tells if the address is known to be ours, so that we shouldn't dial it. It only relies on what we have proven
+// ourselves, never on what the peers say.
 func (s *selfInfoType) isSelf(host string) bool {
 	if s == nil || host == "" {
 		return false
 	}
 	found := false
 	s.lock.With(func() {
-		found = s.external == host || s.selfHosts[host] || len(s.observed[host]) >= selfInfoQuorum
+		at, ok := s.selfHosts[host]
+		found = s.external == host || (ok && selfInfoClock().Sub(at) <= selfInfoSelfHostTTL)
 	})
 	return found
 }
 
+// confirmReachable records that the peer says it has been able to connect to our p2p port. Each peer host counts once.
 func (s *selfInfoType) confirmReachable(peerHost string) {
 	if peerHost == "" {
 		return
 	}
 	s.lock.With(func() {
-		if len(s.reachable) < selfInfoMaxVotes {
-			s.reachable[peerHost] = true
+		now := selfInfoClock()
+		if _, ok := s.reachable[peerHost]; !ok && len(s.reachable) >= selfInfoMaxVotes {
+			for host, at := range s.reachable {
+				if now.Sub(at) > selfInfoVoteTTL {
+					delete(s.reachable, host)
+				}
+			}
+			if len(s.reachable) >= selfInfoMaxVotes {
+				return
+			}
 		}
+		s.reachable[peerHost] = now
 	})
 }
 
-// isReachable tells if enough peers have been able to connect to us
+// isReachable tells if enough peers have been able to connect to us. Informational.
 func (s *selfInfoType) isReachable() bool {
-	reachable := false
-	s.lock.With(func() { reachable = len(s.reachable) >= selfInfoQuorum })
-	return reachable
+	n := 0
+	s.lock.With(func() {
+		now := selfInfoClock()
+		for _, at := range s.reachable {
+			if now.Sub(at) <= selfInfoVoteTTL {
+				n++
+			}
+		}
+	})
+	return n >= selfInfoQuorum
 }
 
 // addSelfHost records an address which we know to be ours, because a connection to it has come back to us
 func (s *selfInfoType) addSelfHost(host string) {
+	if host == "" {
+		return
+	}
 	s.lock.With(func() {
-		if len(s.selfHosts) < selfInfoMaxHosts {
-			s.selfHosts[host] = true
+		now := selfInfoClock()
+		if _, ok := s.selfHosts[host]; !ok && len(s.selfHosts) >= selfInfoMaxHosts {
+			oldest, oldestAt := "", now
+			for h, at := range s.selfHosts {
+				if oldest == "" || at.Before(oldestAt) {
+					oldest, oldestAt = h, at
+				}
+			}
+			delete(s.selfHosts, oldest)
 		}
+		s.selfHosts[host] = now
 	})
 }
 
