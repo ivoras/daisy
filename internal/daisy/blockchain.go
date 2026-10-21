@@ -1,9 +1,11 @@
 package daisy
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -88,6 +90,16 @@ func ensureBlockchainSubdirectoryExists() {
 // Initializes the blockchain: creates database entries and the genesis block file
 func blockchainInit(createDefault bool) {
 	ensureBlockchainSubdirectoryExists()
+	if err := recoverReorganization(); err != nil {
+		log.Fatalf("recoverReorganization: %v", err)
+	}
+	if err := reconcileChainState(); err != nil {
+		log.Fatalf("reconcileChainState: %v", err)
+	}
+	// The blocks waiting for their predecessors are only kept in memory, so these files are leftovers
+	if err := os.RemoveAll(orphanDirname()); err != nil {
+		log.Println(err)
+	}
 	if dbGetBlockchainHeight() == -1 && createDefault {
 		log.Println("Writing down the default Genesis block. Let there be light.")
 
@@ -205,8 +217,8 @@ func blockchainInit(createDefault bool) {
 	}
 }
 
-// Verifies the entire blockchain to see if there are errors.
-// TODO: Dynamic adding and revoking of key is not yet checked
+// Verifies the entire best chain to see if there are errors. It replays the chain from the genesis block, so that every
+// block is checked against the signatory keys as they were when it was signed.
 func blockchainVerifyEverything() error {
 	if cfg.faster {
 		log.Println("Skipping blockchain consistency checks")
@@ -214,6 +226,9 @@ func blockchainVerifyEverything() error {
 	}
 	log.Println("Verifying all the blocks (use --faster to skip)...")
 	maxHeight := dbGetBlockchainHeight()
+	keys := newKeySet()
+	previousHash := GenesisBlockPreviousBlockHash
+	totalScore := 0
 	for height := 0; height <= maxHeight; height++ {
 		if height > 0 && height%1000 == 0 {
 			log.Println("Verifying block", height)
@@ -237,155 +252,102 @@ func blockchainVerifyEverything() error {
 			return fmt.Errorf("block %d: it's supposed to be the genesis block but its hash doesn't match %s",
 				height, chainParams.GenesisBlockHash)
 		}
-		dbpk, err := dbGetPublicKey(dbb.SignaturePublicKeyHash)
-		if err != nil {
-			return fmt.Errorf("block %d: error getting public key %s", height, dbb.SignaturePublicKeyHash)
+		if dbb.PreviousBlockHash != previousHash {
+			return fmt.Errorf("block %d: its previous block hash %s is not the hash of the block before it, %s",
+				height, dbb.PreviousBlockHash, previousHash)
 		}
-		creatorPublicKey, err := dcrypto.DecodePublicKeyBytes(dbpk.publicKeyBytes)
-		if err != nil {
-			return fmt.Errorf("block %d: cannot decode public key %s", height, dbb.SignaturePublicKeyHash)
-		}
-		hashBytes, err := hex.DecodeString(dbb.Hash)
-		if err != nil {
-			return fmt.Errorf("block %d: cannot decode hash %s", height, dbb.Hash)
-		}
-		err = dcrypto.VerifyBytes(creatorPublicKey, hashBytes, dbb.HashSignature)
-		if err != nil {
-			log.Println(creatorPublicKey, hashBytes, dbb.HashSignature)
-			return fmt.Errorf("block %d: block hash signature is invalid (%v)", height, err)
-		}
-		previousHashBytes, err := hex.DecodeString(dbb.PreviousBlockHash)
-		if err != nil {
-			return fmt.Errorf("block %d: cannot decode previous block hash %s", height, dbb.PreviousBlockHash)
-		}
-		err = dcrypto.VerifyBytes(creatorPublicKey, previousHashBytes, dbb.PreviousBlockHashSignature)
-		if err != nil {
-			return fmt.Errorf("block %d: previous block hash signature is invalid (%v)", height, err)
-		}
-		b, err := OpenBlockByHeight(height)
+
+		// The metadata within the block must be the same as the one in the index
+		b, err := OpenBlockFile(blockFilename)
 		if err != nil {
 			return fmt.Errorf("block %d: cannot open block db file: %v", height, err)
 		}
-		blockKeyOps, err := b.dbGetKeyOps()
+		if b.PreviousBlockHash != dbb.PreviousBlockHash || b.SignaturePublicKeyHash != dbb.SignaturePublicKeyHash ||
+			b.Version != dbb.Version || !bytes.Equal(b.PreviousBlockHashSignature, dbb.PreviousBlockHashSignature) {
+			b.Close()
+			return fmt.Errorf("block %d: the metadata in the block file doesn't match the one in the database", height)
+		}
+		b.HashSignature = dbb.HashSignature
+
+		var ops map[string][]BlockKeyOp
+		if height == genesisBlockHeight {
+			ops, err = verifyGenesisBlock(b, keys)
+		} else {
+			ops, err = validateBlock(b, height, keys)
+		}
+		b.Close()
 		if err != nil {
-			if err := b.Close(); err != nil {
-				panic(err)
-			}
-			return fmt.Errorf("block %d: cannot get key ops: %v", height, err)
+			return fmt.Errorf("block %d: %v", height, err)
 		}
-		if err = b.Close(); err != nil {
-			panic(err)
+		totalScore += blockScore(keys, height, dbb.SignaturePublicKeyHash)
+		if dbb.TotalScore != totalScore {
+			return fmt.Errorf("block %d: total score is %d, but it should be %d", height, dbb.TotalScore, totalScore)
 		}
-		Q := QuorumForHeight(height)
-		for keyOpKeyHash, keyOps := range blockKeyOps {
-			if len(keyOps) != Q {
-				return fmt.Errorf("block %d: key ops for %s don't have quorum: %d vs Q=%d",
-					height, keyOpKeyHash, len(keyOps), Q)
-			}
-			op := keyOps[0].op
-			for _, kop := range keyOps {
-				if kop.op != op {
-					return fmt.Errorf("block %d: key ops for %s don't match: %s vs %s",
-						height, keyOpKeyHash, kop.op, op)
-				}
-				dbSigningKey, err := dbGetPublicKey(kop.signatureKeyHash)
-				if err != nil {
-					return fmt.Errorf("block %d: cannot get public key %s from main db", height, kop.signatureKeyHash)
-				}
-				signingKey, err := dcrypto.DecodePublicKeyBytes(dbSigningKey.publicKeyBytes)
-				if err != nil {
-					return fmt.Errorf("block %d: cannot decode public key %s", height, dbSigningKey.publicKeyHash)
-				}
-				if err = dcrypto.VerifyPublicKeyHashSignature(signingKey, kop.publicKeyHash, kop.signature); err != nil {
-					return fmt.Errorf("block %d: key op signature invalid for signer %s: %v", height, kop.signatureKeyHash, err)
-				}
-			}
+		keys.apply(height, ops)
+		previousHash = dbb.Hash
+	}
+
+	// The table of keys is derived from the blocks, so it must agree with what the blocks say
+	tableKeys, err := dbLoadKeySet()
+	if err != nil {
+		return err
+	}
+	if len(tableKeys.keys) != len(keys.keys) {
+		return fmt.Errorf("the signatory keys in the database (%d) are not the ones from the blocks (%d)", len(tableKeys.keys), len(keys.keys))
+	}
+	for hash, ki := range keys.keys {
+		tk, ok := tableKeys.keys[hash]
+		if !ok || tk.addHeight != ki.addHeight || tk.revokeHeight != ki.revokeHeight {
+			return fmt.Errorf("the key %s in the database is not the way the blocks say it is", hash)
 		}
 	}
 	return nil
 }
 
-// Checks if a new block can be accepted to extend the blockchain
-func checkAcceptBlock(blk *Block) (int, error) {
-	// Step 1: Does the block fit, i.e. does it extend the chain?
-	if blk.Version != CurrentBlockVersion {
-		return 0, fmt.Errorf("Unsupported block version: %d", blk.Version)
-	}
-	prevBlk, err := dbGetBlock(blk.PreviousBlockHash)
+// verifyGenesisBlock checks the genesis block: the keys which it adds are the first signatories, and it is signed by one
+// of them. The keys are added to the key set. Returns the key operations of the block.
+func verifyGenesisBlock(b *Block, keys *keySet) (map[string][]BlockKeyOp, error) {
+	ops, err := b.dbGetKeyOps()
 	if err != nil {
-		return 0, fmt.Errorf("Cannot find previous block %s: %v", blk.PreviousBlockHash, err)
+		return nil, err
 	}
-	thisBlockHeight := prevBlk.Height + 1
-	if _, err = dbGetBlockByHeight(thisBlockHeight); err == nil {
-		return 0, fmt.Errorf("The block to accept would replace an existing block, and this is not supported yet (height=%d)", prevBlk.Height+1)
+	if len(ops) == 0 {
+		return nil, errors.New("no key ops in the genesis block")
 	}
-	// Step 2: Is the block signed by a valid signatory?
-	signatoryPubKey, err := dbGetPublicKey(blk.SignaturePublicKeyHash)
+	keys.apply(genesisBlockHeight, ops)
+	signatory, ok := keys.get(b.SignaturePublicKeyHash)
+	if !ok {
+		return nil, fmt.Errorf("the genesis block is signed by %s, which it doesn't add", b.SignaturePublicKeyHash)
+	}
+	pub, err := dcrypto.DecodePublicKeyBytes(signatory.publicKey)
 	if err != nil {
-		return 0, fmt.Errorf("Cannot find an accepted public key %s signing the block", blk.SignaturePublicKeyHash)
+		return nil, err
 	}
-	if signatoryPubKey.isRevoked {
-		return 0, fmt.Errorf("The public key %s signing the block is revoked on %v", blk.SignaturePublicKeyHash, signatoryPubKey.timeRevoked)
+	if err = dcrypto.VerifyHexBytes(pub, b.Hash, b.HashSignature); err != nil {
+		return nil, fmt.Errorf("block hash signature is invalid (%v)", err)
 	}
-	sigPubKey, err := dcrypto.DecodePublicKeyBytes(signatoryPubKey.publicKeyBytes)
-	if err != nil {
-		return 0, fmt.Errorf("Cannot decode public key %s: %v", blk.SignaturePublicKeyHash, err)
+	if err = dcrypto.VerifyHexBytes(pub, b.PreviousBlockHash, b.PreviousBlockHashSignature); err != nil {
+		return nil, fmt.Errorf("previous block hash signature is invalid (%v)", err)
 	}
-	err = dcrypto.VerifyHexBytes(sigPubKey, blk.PreviousBlockHash, blk.PreviousBlockHashSignature)
-	if err != nil {
-		return 0, fmt.Errorf("Verification of previous block hash has failed: %v", err)
-	}
-	err = dcrypto.VerifyHexBytes(sigPubKey, blk.Hash, blk.HashSignature)
-	if err != nil {
-		return 0, fmt.Errorf("Verification of block hash has failed: %v", err)
-	}
-	allKeyOps, err := blk.dbGetKeyOps()
-	if err != nil {
-		return 0, err
-	}
-	targetQuorum := QuorumForHeight(thisBlockHeight)
-	for key, keyOps := range allKeyOps {
-		if len(keyOps) < targetQuorum {
-			return 0, fmt.Errorf("Quorum of %d not met for key ops on key %s", targetQuorum, key)
-		}
-		for _, keyOp := range keyOps {
-			signatoryPubKey, err = dbGetPublicKey(keyOp.signatureKeyHash)
-			if err != nil {
-				return 0, fmt.Errorf("Error retrieving supposedly key op signatory %s", keyOp.signatureKeyHash)
+	for key, keyOps := range ops {
+		for _, kop := range keyOps {
+			if kop.op != "A" {
+				return nil, fmt.Errorf("the genesis block can only add keys, not %q (%s)", kop.op, key)
 			}
-			sigPubKey, err := dcrypto.DecodePublicKeyBytes(signatoryPubKey.publicKeyBytes)
-			if err != nil {
-				return 0, fmt.Errorf("Cannot decode public key %s: %v", signatoryPubKey.publicKeyHash, err)
+			signer, ok := keys.get(kop.signatureKeyHash)
+			if !ok {
+				return nil, fmt.Errorf("key op for %s is signed by %s, which is not a genesis key", key, kop.signatureKeyHash)
 			}
-			err = dcrypto.VerifyPublicKeyHashSignature(sigPubKey, key, keyOp.signature)
+			signingKey, err := dcrypto.DecodePublicKeyBytes(signer.publicKey)
 			if err != nil {
-				return 0, fmt.Errorf("Failed verification of key op for %s by %s", key, keyOp.signatureKeyHash)
+				return nil, err
+			}
+			if err = dcrypto.VerifyPublicKeyHashSignature(signingKey, key, kop.signature); err != nil {
+				return nil, fmt.Errorf("key op signature invalid for signer %s: %v", kop.signatureKeyHash, err)
 			}
 		}
-		// At this point, all required signatures have been verified
-		if keyOps[0].op == "A" {
-			// Add the key to the list of valid signatories. But first, check if it already exists.
-			_, err := dbGetPublicKey(key)
-			if err == nil {
-				return 0, fmt.Errorf("Attempt to add an already existing key to the list of signatores")
-			}
-			dbWritePublicKey(keyOps[0].publicKeyBytes, key, thisBlockHeight)
-		} else if keyOps[0].op == "R" {
-			// Revoke the key. But first, check if it's already revoked.
-			dbpk, err := dbGetPublicKey(key)
-			if err != nil {
-				return 0, fmt.Errorf("Cannot retrieve key to revoke: %s", key)
-			}
-			if dbpk.isRevoked {
-				return 0, fmt.Errorf("Attempt to revoke a key which is already revoked: %s", key)
-			}
-			dbRevokePublicKey(key)
-		} else {
-			return 0, fmt.Errorf("Invalid key op: %s", keyOps[0].op)
-		}
 	}
-	// Everything's ok, the block is ok to import.
-	return thisBlockHeight, nil
+	return ops, nil
 }
 
 // QuorumForHeight calculates the required key op quorum for the given block height

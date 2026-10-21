@@ -101,9 +101,23 @@ Talks / presentations I gave about Daisy:
     * The previous block hash is signed with a key which is one of the accepted private keys, i.e. signatories, i.e. which is present in the previous blocks' `_keys` table.
     * The `_keys` table contains new signatory keys additions and revocations. Both operations must be signed by a number of currently valid signatories, where the
       number is given as `1 if height < 149 else floor(log(height)*2)`
-    * Longest chain wins.
-* Flood-based p2p network: every node can request a list of known connections from the other nodes.
+    * The key operations must be signed by at least that number of *different* signatories who are valid at that point of the chain (a revoked key can't sign anything).
+    * If there are competing branches, the branch with the highest total score wins, see "Signing turns and forks" below.
+* Flood-based p2p network: every node can request a list of known connections from the other nodes. A peer is only remembered and passed on after it has said a valid hello, peers which stop answering are forgotten, and there are limits on the numbers of connections and of known peers.
 * Each message contains the genesis (root) block hash, so technically multiple chains can safely communicate on the same TCP port
+
+### Signing turns and forks
+
+Any signatory may sign a block at any time, so two of them can extend the same block and the blockchain forks. All the nodes pick the same branch by giving every block a score and following the branch with the highest total:
+
+* The signatories take turns: for the block at height `H`, it's the turn of the signatory at position `H mod N` in the list of the `N` currently valid signatory key hashes, sorted.
+* A block signed by the signatory whose turn it is scores 2, a block signed by any other signatory scores 1 (the genesis block scores 0).
+* The branch whose tip has the highest total score is the best chain. If the scores are equal, the tip with the lower block hash wins.
+* A branch that forks off more than 128 blocks below the tip is ignored.
+
+Nobody is prevented from signing out of turn, so a signatory who is offline never blocks the others, but a block out of turn loses against a block in turn. With a single signatory every block scores 2 and the best chain is simply the longest one. `daisy signimportblock` tells whether the new block is in turn.
+
+When another branch becomes the best chain, the blocks it replaces are kept as side branches (in the `sideblocks` table and the `blocks/side` directory) and can come back if their branch is extended. The signatory keys are rolled back and forward together with the blocks.
 
 ### Random thoughts and blue-Moon wishes
 

@@ -56,6 +56,20 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
 - Don't run networking code in tests; the P2P layer uses package-level singletons and dials real hosts.
   Unit-test the pure packages and the deterministic functions in `internal/daisy`.
 
+## Block tree and fork choice
+
+- `consensus.go`: scoring (in turn 2, out of turn 1), `isBetterTip`, and `validateBlock`/`validateKeyOps`, which are pure
+  functions of the block and a `keySet` (`keyset.go`). Validation never writes anything.
+- `chainstate.go`: `acceptBlock` is the only way a block enters the chain (P2P and `signimportblock` both use it).
+  It serializes on `chainLock`, stores blocks of other branches in `sideblocks`, and `reorganize`s when a branch wins.
+  Blocks whose predecessor is unknown wait in `orphanPool` and the missing block is requested from the peer.
+- The `pubkeys` table is the key set as of the tip, and each key records the heights of the blocks that added and
+  revoked it, so it can be rolled back (`keySet.rewind`, `dbRewindKeys`). Keys with a negative height are local only.
+- When changing any of this, run the tests in `forkchoice_test.go` and read the ordering notes: blocks must be built
+  parent-first, and results for equal-score branches are decided by hash.
+- `schema_version` (config table) and `reconcileChainState` upgrade databases of older versions. Bump
+  `currentSchemaVersion` and extend the reconcile when the derived data changes.
+
 ## Things that are easy to break
 
 - **Consensus compatibility.** Block hashes are SHA-256 of the raw SQLite file, and signatures are
@@ -95,14 +109,12 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
 
 These were found in a review and are tracked here so they aren't mistaken for intended behaviour:
 
-- `checkAcceptBlock` writes/revokes public keys while validating, before the block is accepted
-  (not transactional). Key-op quorum is checked as `>=` on accept but `==` on startup verification,
-  and distinct signers are only enforced by the block's own `_keys` primary key.
-- `blockchainVerifyEverything` doesn't check `prev_hash` linkage between consecutive blocks and
-  resolves signing keys against the final key set rather than the set at that height.
-- No fork handling: a block at an existing height is rejected ("longest chain wins" is not implemented).
-- P2P has no limit on the number of simultaneous connections, no encryption or authentication, and peer
-  discovery trusts whatever peers gossip (see the discovery notes in the PR history / README roadmap).
+- P2P has no encryption or authentication. Peer discovery still trusts what peers gossip about who is alive
+  (it only dials them, and remembers them after a valid hello), so a few malicious nodes can crowd out others.
+- There is no protocol version negotiation: `hello.version` is only logged. Compatibility relies on unknown JSON
+  fields and unknown messages being ignored. A rule change would need a protocol number and an activation height.
+- Fork choice is by score only; there is no finality, and a branch deeper than `maxReorgDepth` is never accepted,
+  so a node that was offline for longer than that during a fork must be re-created (`daisy pull`).
 - `mining.CountStartZeroBits` counts zero bits across all bytes rather than only leading ones (the PoW
   code is unused).
 - `cfg.httpPort` is unexported, so `http_port` in the JSON config file is silently ignored.
