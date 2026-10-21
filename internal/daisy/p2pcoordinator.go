@@ -1,10 +1,11 @@
 package daisy
 
 import (
-	"fmt"
 	"log"
 	"net"
-	"slices"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ivoras/daisy/internal/util"
@@ -31,7 +32,7 @@ type p2pCoordinatorType struct {
 	timeTicks               chan int
 	lastTickTipHash         string
 	lastTickTipHeight       int
-	recentlyDialed          *util.StringSetWithExpiry
+	pendingDials            atomic.Int32 // Connections being made at the moment
 	recentlyRequestedBlocks *util.StringSetWithExpiry
 	lastReconnectTime       time.Time
 	badPeers                *util.StringSetWithExpiry // Addresses ("ip:port") we have dialed and shouldn't dial again
@@ -45,7 +46,6 @@ var p2pCoordinator = p2pCoordinatorType{
 	timeTicks:               make(chan int),
 	badPeers:                util.NewStringSetWithExpiry(15 * time.Minute),
 	badHosts:                util.NewStringSetWithExpiry(15 * time.Minute),
-	recentlyDialed:          util.NewStringSetWithExpiry(5 * time.Minute),
 }
 
 // The payload of p2pCtrlSearchForBlocks: look for better blocks than ours at this peer
@@ -82,7 +82,7 @@ func (co *p2pCoordinatorType) Run() {
 			case p2pCtrlSearchForBlocks:
 				co.handleSearchForBlocks(msg.payload.(p2pSearchRequest))
 			case p2pCtrlConnectPeers:
-				co.handleConnectPeers(msg.payload.([]string))
+				co.handleConnectPeers(msg.payload.(p2pConnectPeersRequest))
 			}
 		case <-ticker.C:
 			co.handleTimeTick()
@@ -105,53 +105,86 @@ func (co *p2pCoordinatorType) handleSearchForBlocks(req p2pSearchRequest) {
 	req.peer.send(msg)
 }
 
-func (co *p2pCoordinatorType) handleConnectPeers(addresses []string) {
-	localAddresses := util.LocalAddresses()
+// The payload of p2pCtrlConnectPeers: addresses of peers that we have heard of
+type p2pConnectPeersRequest struct {
+	addresses    []string
+	source       string // The address of the peer that has told us, or the kind of source ("seed", "mdns"...)
+	allowPrivate bool   // The addresses of private networks are fine
+	trusted      bool   // The source is configured by whoever has made the chain (or is the local network), not a peer
+	keepPorts    bool   // The addresses are complete, otherwise the ports are replaced with the default one
+}
 
-	// The peer controls this list, and every address means a (slow) connection attempt
-	addresses = addresses[:min(len(addresses), p2pMaxPeerAddresses)]
+// The number of the outbound connections which we want to have
+const p2pTargetOutbound = 8
 
+// The most addresses taken from a list which was not sent by a peer
+const p2pMaxTrustedAddresses = 256
+
+// handleConnectPeers puts addresses of peers in the address book, and connects to some of them if we need more peers.
+// (The peers don't make us connect to anything: it's the address book that decides.)
+func (co *p2pCoordinatorType) handleConnectPeers(req p2pConnectPeersRequest) {
+	limit := p2pMaxPeerAddresses // The peer controls this list
+	if req.trusted {
+		limit = p2pMaxTrustedAddresses
+	}
+	addresses := req.addresses[:min(len(req.addresses), limit)]
 	for _, address := range addresses {
-		host, _, err := util.SplitAddress(address)
-		if err != nil {
-			log.Println(address, err)
+		host, port, ok := splitHostPortDefault(address)
+		if !ok {
 			continue
 		}
-		canonicalAddress := fmt.Sprintf("%s:%d", host, DefaultP2PPort)
-		if p2pPeers.HasAddress(canonicalAddress) {
+		if !req.keepPorts {
+			port = DefaultP2PPort // The peers are only looked for on the default port
+		}
+		if isPrivateHost(host) && !req.allowPrivate {
 			continue
 		}
-		if co.recentlyDialed.TestAndSet(canonicalAddress) {
-			// The peers shouldn't be able to make us try the same address over and over
-			continue
+		abAdd(net.JoinHostPort(host, strconv.Itoa(port)), req.source)
+	}
+	co.maintainConnections()
+}
+
+// splitHostPortDefault splits "host:port", the port being optional
+func splitHostPortDefault(address string) (host string, port int, ok bool) {
+	address = strings.TrimSpace(address)
+	if h, p, err := net.SplitHostPort(address); err == nil {
+		if port, err = strconv.Atoi(p); err != nil || port < 1 || port > 65535 {
+			return "", 0, false
 		}
-		if p2pPeers.Count(true) >= p2pMaxOutbound {
-			return
+		return h, port, h != ""
+	}
+	address = strings.Trim(address, "[]")
+	return address, DefaultP2PPort, address != "" && len(address) <= 255
+}
+
+// maintainConnections connects to peers from the address book until there are enough outbound connections.
+func (co *p2pCoordinatorType) maintainConnections() {
+	need := p2pTargetOutbound - p2pPeers.Count(true) - int(co.pendingDials.Load())
+	if need <= 0 {
+		return
+	}
+	groups := make(map[string]bool)
+	for _, c := range p2pPeers.Snapshot(false) {
+		if c.outbound {
+			if host, _, ok := splitHostPortDefault(c.address); ok {
+				groups[networkGroup(host)] = true
+			}
 		}
-		addr, err := net.ResolveTCPAddr("tcp", canonicalAddress)
-		if err != nil {
-			continue
-		}
-		if co.isBanned(addr) {
-			continue
-		}
-		if slices.Contains(localAddresses, addr.IP.String()) {
-			continue
-		}
-		// Detect if there's a canonical peer on the other side, somewhat brute-forceish
-		conn, err := p2pDialer.Dial("tcp", addr.String())
-		if err != nil {
-			continue
-		}
-		p2pc, err := p2pSetupPeer(addr.String(), conn, true)
-		if err != nil {
-			log.Println("handleConnectPeers:", err)
-			continue
-		}
-		// It's saved in the database when it says hello, so that only real peers of our chain get there
-		p2pc.savedAddress = canonicalAddress
-		go p2pc.handleConnection()
-		log.Println("Detected canonical peer at", canonicalAddress)
+	}
+	delete(groups, "") // The private networks aren't limited
+	for _, address := range abSelect(need, groups, func(address string) bool {
+		return p2pPeers.HasAddress(address) || co.badPeers.Has(address)
+	}) {
+		abTry(address)
+		co.pendingDials.Add(1)
+		go func() {
+			p2pc, err := p2pConnectPeer(address)
+			co.pendingDials.Add(-1)
+			if err != nil {
+				return
+			}
+			p2pc.handleConnection()
+		}()
 	}
 }
 
@@ -170,10 +203,11 @@ func (co *p2pCoordinatorType) handleTimeTick() {
 	}
 	if time.Since(co.lastReconnectTime) >= 10*time.Minute {
 		co.lastReconnectTime = time.Now()
-		dbPrunePeers()
+		abPrune()
 		p2pPeers.saveConnectablePeers()
-		co.connectDbPeers()
+		go co.discoverPeers()
 	}
+	co.maintainConnections()
 	p2pPeers.tryPeersConnectable()
 }
 
@@ -187,22 +221,5 @@ func (co *p2pCoordinatorType) floodPeersWithNewBlocks(minHeight, maxHeight int) 
 	}
 	for _, p2pc := range p2pPeers.Snapshot(true) {
 		p2pc.send(msg)
-	}
-}
-
-func (co *p2pCoordinatorType) connectDbPeers() {
-	peers := dbGetPeersToDial()
-	for peer := range peers {
-		if p2pPeers.HasAddress(peer) {
-			continue
-		}
-		if co.badPeers.Has(peer) {
-			continue
-		}
-		p2pc, err := p2pConnectPeer(peer)
-		if err != nil {
-			continue
-		}
-		go p2pc.handleConnection()
 	}
 }

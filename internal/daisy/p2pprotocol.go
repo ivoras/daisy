@@ -346,9 +346,10 @@ type selfInfoType struct {
 	observed  map[string]map[string]bool // The address that peers see us at -> the peers (their hosts) that have said so
 	reachable map[string]bool            // The peers (their hosts) that have connected to our p2p port
 	external  string                     // The address of the router, if we have got a port mapped on it
+	selfHosts map[string]bool            // The addresses at which we have found ourselves, by connecting to them
 }
 
-var selfInfo = selfInfoType{observed: make(map[string]map[string]bool), reachable: make(map[string]bool)}
+var selfInfo = selfInfoType{observed: make(map[string]map[string]bool), reachable: make(map[string]bool), selfHosts: make(map[string]bool)}
 
 const (
 	// How many peers need to agree before we believe something about ourselves
@@ -399,7 +400,7 @@ func (s *selfInfoType) isSelf(host string) bool {
 	}
 	found := false
 	s.lock.With(func() {
-		found = s.external == host || len(s.observed[host]) >= selfInfoQuorum
+		found = s.external == host || s.selfHosts[host] || len(s.observed[host]) >= selfInfoQuorum
 	})
 	return found
 }
@@ -420,6 +421,15 @@ func (s *selfInfoType) isReachable() bool {
 	reachable := false
 	s.lock.With(func() { reachable = len(s.reachable) >= selfInfoQuorum })
 	return reachable
+}
+
+// addSelfHost records an address which we know to be ours, because a connection to it has come back to us
+func (s *selfInfoType) addSelfHost(host string) {
+	s.lock.With(func() {
+		if len(s.selfHosts) < selfInfoMaxHosts {
+			s.selfHosts[host] = true
+		}
+	})
 }
 
 func (s *selfInfoType) setExternal(host string) {

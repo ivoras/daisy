@@ -421,7 +421,6 @@ func (p *p2pPeersSet) tryPeersConnectable() {
 }
 
 func (p *p2pPeersSet) saveConnectablePeers() {
-	dbPeers := dbGetSavedPeers()
 	localAddresses := util.LocalAddresses()
 
 	// Only collect the addresses under the lock: resolving and the database are too slow to do with it held.
@@ -444,16 +443,12 @@ func (p *p2pPeersSet) saveConnectablePeers() {
 		if err != nil {
 			continue
 		}
-		if _, ok := dbPeers[addr.String()]; ok {
-			// Already in db
+		if slices.Contains(localAddresses, addr.IP.String()) || selfInfo.isSelf(addr.IP.String()) {
 			continue
 		}
-		if slices.Contains(localAddresses, addr.String()) {
-			// Local interface
-			continue
+		if abGood(canonicalAddress) {
+			log.Println("Detected canonical peer at", canonicalAddress)
 		}
-		log.Println("Detected canonical peer at", canonicalAddress)
-		dbSavePeer(canonicalAddress)
 	}
 }
 
@@ -499,7 +494,8 @@ func p2pServer() {
 }
 
 func p2pClient() {
-	p2pCoordinator.connectDbPeers()
+	p2pCoordinator.maintainConnections()
+	p2pCoordinator.discoverPeers()
 }
 
 func (p2pc *p2pConnection) sendMsg(msg any) error {
@@ -717,7 +713,11 @@ func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
 	}
 	var remotePeers []string
 	if remotePeers, err = msg.GetStringList("my_peers"); err == nil {
-		p2pCtrlSend(p2pCtrlMessage{msgType: p2pCtrlConnectPeers, payload: remotePeers})
+		if peerHost, err := remoteHost(p2pc.conn.RemoteAddr()); err == nil {
+			// A peer on a private network may tell about its neighbours, others may not
+			p2pCtrlSend(p2pCtrlMessage{msgType: p2pCtrlConnectPeers, payload: p2pConnectPeersRequest{
+				addresses: remotePeers, source: peerHost, allowPrivate: isPrivateHost(peerHost)}})
+		}
 	}
 	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.address, ver, p2pc.peerID, p2pc.chainHeight)
 	// Check for duplicates
@@ -734,6 +734,12 @@ func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
 	if p2pc.peerID == p2pEphemeralID {
 		log.Printf("%v is apparently myself (%x). Dropping it.", p2pc.conn, p2pc.peerID)
 		dup = true
+		if host, err := remoteHost(p2pc.conn.RemoteAddr()); err == nil && p2pc.outbound {
+			selfInfo.addSelfHost(host)
+			if p2pc.savedAddress != "" {
+				abForget(p2pc.savedAddress)
+			}
+		}
 	}
 	if dup {
 		if p2pc.outbound {
@@ -751,7 +757,7 @@ func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
 	p2pPeers.markHandshaken(p2pc)
 	if p2pc.outbound && p2pc.savedAddress != "" {
 		// A real peer of our chain: only now it's worth remembering
-		dbSavePeer(p2pc.savedAddress)
+		abGood(p2pc.savedAddress)
 	}
 
 	// Does the peer have something better than we do?
@@ -1040,14 +1046,14 @@ func p2pConnectPeer(address string) (*p2pConnection, error) {
 	}
 
 	localAddresses := util.LocalAddresses()
-	if slices.Contains(localAddresses, addr.IP.String()) {
+	if slices.Contains(localAddresses, addr.IP.String()) || selfInfo.isSelf(addr.IP.String()) {
 		return nil, fmt.Errorf("Refusing to connect to myself at %s", addr.IP)
 	}
 
 	conn, err := p2pDialer.Dial("tcp", address)
 	if err != nil {
 		log.Println("Error connecting to", address, err)
-		dbPeerFailed(address)
+		abFailed(address)
 		return nil, err
 	}
 	p2pc, err := p2pSetupPeer(addr.String(), conn, true)

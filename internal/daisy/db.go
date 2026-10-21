@@ -119,8 +119,13 @@ const peersTableCreate = `
 CREATE TABLE peers (
 	address			VARCHAR NOT NULL PRIMARY KEY,	-- in the format "address:port", lowercase
 	time_added		INTEGER NOT NULL, -- time last seen
-	permanent		BOOLEAN NOT NULL DEFAULT 0,
-	failures		INTEGER NOT NULL DEFAULT 0 -- failed connection attempts since the last success
+	permanent		BOOLEAN NOT NULL DEFAULT 0, -- the bootstrap peers
+	failures		INTEGER NOT NULL DEFAULT 0, -- failed connection attempts since the last success
+	tried			BOOLEAN NOT NULL DEFAULT 0, -- the peer has said hello (see addrbook.go)
+	net_group		VARCHAR NOT NULL DEFAULT '', -- the network group of the address, see networkGroup()
+	source_group	VARCHAR NOT NULL DEFAULT '', -- who told us about the address
+	last_try		INTEGER NOT NULL DEFAULT 0,
+	last_success	INTEGER NOT NULL DEFAULT 0
 );
 `
 
@@ -158,7 +163,7 @@ func dbInit() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	freshSchema := false
+	freshSchema, newPeersTable := false, false
 	if !mainDbFileExists || !dbTableExists(mainDb, "blockchain") {
 		// Create system tables
 		_, err = mainDb.Exec(blockchainTableCreate)
@@ -184,15 +189,15 @@ func dbInit() {
 		if err != nil {
 			log.Panic(err)
 		}
-		for peer := range bootstrapPeers {
-			_, err = mainDb.Exec("INSERT INTO peers(address, time_added, permanent) VALUES (?, ?, ?)", peer, util.NowUTC(), true)
-			if err != nil {
-				log.Panic(err)
-			}
-		}
+		newPeersTable = true
 	}
 
 	dbMigrate(freshSchema)
+	if newPeersTable {
+		for peer := range bootstrapPeers {
+			abAddBootstrap(peer)
+		}
+	}
 
 	dbFileName = filepath.Join(cfg.DataDir, privateDbFilename)
 	_, err = os.Stat(dbFileName)
@@ -546,6 +551,14 @@ func dbMigrate(freshSchema bool) {
 	add("blockchain", "total_score", "INTEGER NOT NULL DEFAULT 0")
 	add("pubkeys", "revoke_block_height", "INTEGER")
 	add("peers", "failures", "INTEGER NOT NULL DEFAULT 0")
+	if !dbColumnExists(mainDb, "peers", "tried") {
+		add("peers", "tried", "BOOLEAN NOT NULL DEFAULT 0")
+		add("peers", "net_group", "VARCHAR NOT NULL DEFAULT ''")
+		add("peers", "source_group", "VARCHAR NOT NULL DEFAULT ''")
+		add("peers", "last_try", "INTEGER NOT NULL DEFAULT 0")
+		add("peers", "last_success", "INTEGER NOT NULL DEFAULT 0")
+		dbMigrateAddressBook()
+	}
 	if !dbTableExists(mainDb, "sideblocks") {
 		if _, err := mainDb.Exec(sideBlocksTableCreate); err != nil {
 			log.Panic(err)
@@ -641,64 +654,28 @@ func dbGetSavedPeers() peerStringMap {
 	return result
 }
 
-// Limits for the table of known peers
-const (
-	// A peer is given up on (unless it's a permanent, bootstrap one) after this many failed connection attempts in a row
-	peerMaxFailures = 5
-
-	// ... or when it hasn't been seen for this long
-	peerMaxAge = 30 * 24 * time.Hour
-
-	// The table doesn't grow beyond this many peers, whatever the other peers gossip to us
-	peerTableMaxSize = 1000
-)
-
-// Gets the peers which are worth connecting to: the ones which haven't repeatedly failed
-func dbGetPeersToDial() peerStringMap {
-	result := peerStringMap{}
-	rows, err := mainDb.Query("SELECT address, time_added FROM peers WHERE failures < ? OR permanent", peerMaxFailures)
+// Fills in the address book columns for the peers saved by the versions before them: the bootstrap peers are tried
+// ones, the rest has not been proven to be a peer of this chain.
+func dbMigrateAddressBook() {
+	rows, err := mainDb.Query("SELECT address FROM peers")
 	if err != nil {
 		log.Panic(err)
 	}
-	defer rows.Close()
+	var addresses []string
 	for rows.Next() {
-		var tmInt int
-		var address string
-		if err = rows.Scan(&address, &tmInt); err != nil {
-			log.Println(err)
-			continue
+		var a string
+		if rows.Scan(&a) == nil {
+			addresses = append(addresses, a)
 		}
-		result[address] = util.UnixTimeStampToUTCTime(tmInt)
 	}
-	return result
-}
-
-// Saves a p2p peer address to the db, or updates the one which is already there: it's alive now.
-func dbSavePeer(address string) {
-	_, err := mainDb.Exec(`INSERT INTO peers(address, time_added) VALUES (?, ?)
-		ON CONFLICT(address) DO UPDATE SET time_added=excluded.time_added, failures=0`, address, util.NowUTC())
-	if err != nil {
-		log.Panic(err)
-	}
-}
-
-// Records that connecting to the peer has failed
-func dbPeerFailed(address string) {
-	if _, err := mainDb.Exec("UPDATE peers SET failures=failures+1 WHERE address=?", address); err != nil {
-		log.Panic(err)
-	}
-}
-
-// Removes the peers which are dead or old, and the oldest peers if there are too many of them.
-func dbPrunePeers() {
-	_, err := mainDb.Exec("DELETE FROM peers WHERE NOT permanent AND (failures >= ? OR time_added < ?)",
-		peerMaxFailures, time.Now().Add(-peerMaxAge).Unix())
-	if err != nil {
-		log.Panic(err)
-	}
-	_, err = mainDb.Exec(`DELETE FROM peers WHERE NOT permanent AND address NOT IN
-		(SELECT address FROM peers ORDER BY permanent DESC, time_added DESC LIMIT ?)`, peerTableMaxSize)
-	if err != nil {
-		log.Panic(err)
+	rows.Close()
+	for _, a := range addresses {
+		group := ""
+		if host, ok := splitPeerAddress(a); ok {
+			group = networkGroup(host)
+		}
+		if _, err := mainDb.Exec("UPDATE peers SET net_group=?, source_group='migration', tried=permanent WHERE address=?", group, a); err != nil {
+			log.Panic(err)
+		}
 	}
 }
