@@ -96,6 +96,9 @@ func readKeyOps(fileName string) (map[string][]BlockKeyOp, error) {
 		return nil, err
 	}
 	defer db.Close()
+	if err = dbCheckBlockTables(db); err != nil {
+		return nil, err
+	}
 	b := Block{db: db}
 	return b.dbGetKeyOps()
 }
@@ -107,6 +110,9 @@ func readBlockTimestamp(fileName string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	defer db.Close()
+	if err = dbCheckBlockTables(db); err != nil {
+		return time.Time{}, err
+	}
 	b := Block{db: db}
 	t, err := b.dbGetMetaTime("Timestamp")
 	if err != nil {
@@ -203,6 +209,11 @@ func acceptBlockLocked(fileName string, hashSignature []byte) (info acceptInfo, 
 		return info, nil
 	}
 	if err != nil {
+		return info, err
+	}
+	// The block is a candidate now: make sure that its file is not corrupt (the blocks which are already known, and
+	// the orphans, which are checked when their predecessor arrives, don't need that)
+	if err = blk.QuickCheck(); err != nil {
 		return info, err
 	}
 	height := prev.Height + 1

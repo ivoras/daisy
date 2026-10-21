@@ -113,7 +113,7 @@ Talks / presentations I gave about Daisy:
     * The previous block hash is signed with a key which is one of the accepted private keys, i.e. signatories, i.e. which is present in the previous blocks' `_keys` table. The signatures must be in the canonical "low-S" form (`daisy` always makes them that way).
     * The block has a `Timestamp` in its `_meta` table, which is later than the timestamp of the previous block by at least the block period, and not more than 15 seconds in the future, see "Limiting how fast a branch can grow" below.
     * The signatory did not sign one of the last `floor(N/2)` blocks of the branch, where `N` is the number of valid signatories, see below.
-    * The `_keys` table contains new signatory keys additions and revocations. Both operations must be signed by a number of currently valid signatories, which is the *quorum* for the height of the block (see below).
+    * The `_keys` table contains new signatory keys additions and revocations. Both operations must be signed by a number of currently valid signatories, which is a majority of them (the *quorum*, see below).
     * The key operations must be signed by at least that number of *different* signatories who are valid at that point of the chain (a revoked key can't sign anything).
     * If there are competing branches, the branch with the highest total score wins, see "Signing turns and forks" below.
 * Flood-based p2p network: every node can request a list of known connections from the other nodes. A peer is only remembered and passed on after it has said a valid hello, peers which stop answering are forgotten, and there are limits on the numbers of connections and of known peers.
@@ -159,19 +159,21 @@ To be accepted as blocks, the SQLite database files have some soft and hard rest
 
 * The databases MUST NOT be created with the "WAL" journal mode. They SHOULD be created with the "OFF" journal mode.
 * The databases SHOULD be created with the smallest possible page size, i.e. 512 bytes.
+* `_meta` and `_keys` MUST be real tables (not views or virtual tables), `_keys` MUST NOT have more than 1000 records, and the file MUST pass SQLite's `PRAGMA quick_check`. Everything else in a block is up to its creator: views, triggers, indexes and generated columns of the user's own tables are fine.
+
+Block files come from other nodes, so they are opened read-only and with the hardening of SQLite which fits: `trusted_schema` is off (views and triggers in a block can't call functions that are not safe for that), the connection is `query_only`, the limits of SQLite (the size of a value and of a statement, the depth of expressions, no `ATTACH`) are lowered, the page cache is small, and the metadata of a block is read with a time limit. See `internal/daisy/blockdb.go`. This applies to `daisy query`, too.
 
 ## Block metadata
 
 ### The `_keys` table
 
-This table contains key operations for block creators. Keys can be either accepted or revoked. It is invalid for a `_keys` table to contain both acceptance and revocation records for a single key. Both acceptance and revocation operations require a quorum, where Q different keys which are already accepted sign the operation on the key in question. The number Q is calculated as:
+This table contains key operations for block creators. Keys can be either accepted or revoked. It is invalid for a `_keys` table to contain both acceptance and revocation records for a single key. Both acceptance and revocation operations require a quorum, where Q different keys which are already accepted sign the operation on the key in question. The number Q is a majority of the valid signatories, at every height above the genesis block:
 
 ```
-  Q = min( QuorumForHeight(H), floor(A/2) + 1 )
-  QuorumForHeight(H) = 1 if H < 149 else floor(log(H)*2)
+  Q = floor(A/2) + 1
 ```
 
-Where `H` is the block height of the block containing these records, and `A` is the number of valid (not revoked) signatories before that block. The second term is there so that a chain with few signatories can still add and revoke keys: no more than a majority of them is ever needed, whatever the height. The table below is the first term.
+Where `A` is the number of valid (not revoked) signatories before the block containing these records (e.g. 2 of 2, 2 of 3, 3 of 4, 3 of 5). A smaller quorum would let a minority of the signatories add keys which they control, become the majority, and get around the rule that limits how often a signatory can sign blocks; this is how Clique works, too. (Earlier versions had a quorum which depended on the block height; it was a single signature on a young chain, and above the majority it would only make keys impossible to change, so it was removed.) The key operations in the genesis block are the only exception, as the first signatories have to be added by somebody.
 
 What is signed is not just the hash of the key, but a message that says what is being done and on which chain:
 
@@ -182,29 +184,6 @@ What is signed is not just the hash of the key, but a message that says what is 
 where `genesis_block_hash` and `key_hash` are the raw 32 bytes of the hashes (without the `1:` prefix), and `op` is the single letter `A` (add) or `R` (revoke), the `op` column of the record. A signature that approved adding a key is therefore no good for revoking it, and a signature on one chain is no good on another one. The signatures must be low-S. The key operations in the *genesis block* (height 0) are the exception: they are signed in the old format (the signature of the key hash alone, any S), because the genesis block of the default chain was made that way and it can't change. The genesis block is pinned by its hash in the chain parameters, so that is the one and only genesis rule; `daisy newchain` uses it, too.
 
 For example, if `Q` is 3, to add a key `K` to the list of accepted keys, there must be exactly 3 records in the `_keys` table pertaining to `K`. Each of the records must contain a valid signature by a different, already accepted key. The key `K` can be then used to sign new blocks immediately after the block which contain this records has been accepted.
-
-A table of the first term, `QuorumForHeight`, for specific block heights is:
-
-```
-  1   1
-  149 10
-  245 11
-  404 12
-  666 13
-  1097 14
-  1809 15
-  2981 16
-  4915 17
-  8104 18
-  13360 19
-  22027 20
-  36316 21
-  59875 22
-  98716 23
-  162755 24
-```
-
-E.g. for block 100000, 23 signatures are required to accept a new signature, if there are at least 45 signatories (with 3 signatories, 2 are enough).
 
 # Basic crypto
 

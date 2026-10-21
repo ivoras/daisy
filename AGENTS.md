@@ -87,8 +87,8 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
   `_meta` at least `block_period_seconds` after the parent's and at most `maxFutureDrift` ahead of the local clock (replaying
   the chain in `blockchainVerifyEverything` passes no "now", so that check is skipped); a signer may not have signed any of
   the previous `floor(N/2)` blocks of the branch (`recentSignersOf`, `recentSignerWindow`); low-S signatures; key ops signed
-  over `dcrypto.KeyOpMessage` (op, genesis hash, key hash); key op quorum is `EffectiveQuorum` (`QuorumForHeight` capped to a
-  majority of the active signatories). The genesis block's key ops use the old `SignPublicKeyHash` format, also in `newchain`.
+  over `dcrypto.KeyOpMessage` (op, genesis hash, key hash); key ops need a majority of the active signatories before the
+  block, `KeyOpQuorum` = `floor(N/2)+1`, at every height (so a minority can't add keys it controls). The genesis block's key ops use the old `SignPublicKeyHash` format, also in `newchain`.
 - Tests: with `testChain`, the timestamps of the blocks advance a second per block from a genesis a day in the past
   (`newBlockAt` sets one explicitly); `tc.next(prev)` picks a signer who is allowed to sign (in turn if possible), because
   `tc.inTurn` may return a signer that signed too recently. A scenario with two signatories can't have one of them sign
@@ -109,9 +109,9 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
   ASN.1-DER ECDSA P-256 over the raw 32-byte hash. The hard-coded genesis block hash/signature in
   `internal/daisy/blockchain.go` must keep verifying against `internal/assets/genesis.db`
   (`TestEmbeddedGenesisBlock`, `TestGenesisBlockKeepsTheOldFormat`): that block has key ops in the old format, a high-S
-  signature and no Timestamp, so every new rule must exempt height 0. `QuorumForHeight` and `EffectiveQuorum` are
-  consensus-critical; the first is pinned by a test against the README table. The key op message
-  (`dcrypto.KeyOpMessage`) is consensus-critical, too. Changing any of these forks the chain.
+  signature and no Timestamp, so every new rule must exempt height 0. `KeyOpQuorum` (a majority, pinned by
+  `TestKeyOpQuorum` and `TestKeyOpsNeedAMajorityAtEveryHeight`) and the key op message
+  (`dcrypto.KeyOpMessage`) are consensus-critical, too. Changing any of these forks the chain.
 - **Never modify `internal/assets/genesis.db`** (or anything that changes its bytes, including opening it
   read-write with SQLite): its hash is the chain's identity.
 - **Block files on disk** are `blocks/<height/65536 as %04x>/block_<height as %08x>.db`. Any code that
@@ -140,6 +140,13 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
   or its `hash_signature` verifies against a key in the `pubkeys` table, whatever the key's state (`signedByKnownSignatory`).
   `blockhashes` heights must be in the range we asked for or near our tip, and at most `p2pMaxBlockHashes` are handled.
   A second `hello` on a connection is ignored.
+- Block files are arbitrary SQLite databases from the network. Open them only through `dbOpen(file, true)` (the
+  `sqlite3_block` driver in `blockdb.go`: `mode=ro`, `query_only`, `trusted_schema=OFF`, lowered limits, escaped DSN),
+  never with `sql.Open("sqlite3", ...)`. `OpenBlockFile`, `readKeyOps` and `readBlockTimestamp` check that `_meta` and
+  `_keys` are real tables (`dbCheckBlockTables`); `acceptBlockLocked` also runs `Block.QuickCheck` (`PRAGMA quick_check`);
+  reads of `_meta`/`_keys` have a time limit and `_keys` is capped at `maxBlockKeyOps`. Don't read user tables or run
+  user SQL on a block while holding `chainLock` (`daisy query` is the only place that runs SQL over blocks, and it
+  doesn't hold it). go-sqlite3 doesn't expose `SQLITE_DBCONFIG_DEFENSIVE`; it only matters for writable connections.
 - Bans: `badPeers` holds dialed `ip:port` addresses (set for outbound duplicate/self connections),
   `badHosts` holds IPs which violated the protocol (oversized or malformed messages). Inbound connections have
   random source ports, so never key a ban on an inbound connection's `ip:port`.
