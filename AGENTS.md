@@ -20,27 +20,43 @@ gofmt -l .                # must print nothing
 
 Run all of these before sending a PR.
 
-Manual smoke test (uses a throwaway data dir; never point it at your real `~/.daisy`):
+Manual smoke test of two nodes on one machine (uses throwaway data dirs; never point it at your real `~/.daisy`).
+Don't use `chainparams.example.json` for it: its bootstrap peer is a real host. The second node finds the first one only
+through `bootstrap_peers`, because `pull` assumes the default p2p port for the server it pulls from.
 
 ```sh
 d=$(mktemp -d)
-./daisy -dir $d/n1 newchain chainparams.example.json   # create a private chain
-./daisy -dir $d/n1 signimportblock some.db             # add a block
+echo '{"consensus_type":"PoA","creator":"test","block_period_seconds":1,"bootstrap_peers":["127.0.0.1:12017"]}' > $d/cp.json
+./daisy -dir $d/n1 newchain $d/cp.json                 # create a private chain
+./daisy -dir $d/n1 signimportblock some.db             # add a block (some.db: any SQLite file; one block per second at most)
 ./daisy -dir $d/n1 query "SELECT * FROM sometable"
+g=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['genesis_block_hash'])" $d/n1/chainparams.json)
 ./daisy -dir $d/n1 -port 12017 -http-port 12018 &       # serve it
-./daisy -dir $d/n2 pull -expect-genesis <genesis hash> http://localhost:12018   # replicate the genesis block
+./daisy -dir $d/n2 pull -expect-genesis $g http://localhost:12018   # replicate the genesis block
+./daisy -dir $d/n2 -port 12027 -http-port 12028 &       # sync the rest over p2p
+curl -s localhost:12028/status                          # after a few seconds: the same height and tip as n1
 ```
+
+Blocks signed on n1 while both run should reach n2 within about 20 seconds.
 
 ## Layout
 
 ```
 cmd/daisy/            main package: just calls daisy.Main()
 internal/daisy/       the node: config, CLI actions, blockchain rules, system DBs, P2P, block HTTP server
+  consensus.go        block validity and fork choice rules (pure functions); keyset.go: the signatory keys
+  chainstate.go       acceptBlock, side branches, reorganization, orphans
+  blockchain.go       block files, metadata, verifying the whole chain; blockdb.go: opening untrusted block files
+  db.go               the system databases (daisy.db, private.db)
+  p2p.go              connections, the hello, message handlers; p2pprotocol.go: versions, block transfer in chunks,
+                      selfInfo; p2psync.go: paged block hashes; p2pnet.go: size limits; p2pcoordinator.go: the coordinator
+  addrbook.go         the address book; discovery.go: DNS seeds and peer lists; nat.go, mdns.go: opt-in NAT and mDNS
+  cliactions.go       the commands (newchain, signimportblock, pull, query, mykeys); config.go: flags and config file
 internal/dcrypto/     stateless crypto: ECDSA P-256 sign/verify, "1:<sha256>" public key hash format
 internal/util/        generic helpers (hashing, StrIfMap JSON accessors, StringSetWithExpiry, mutex helper)
 internal/mining/      unused proof-of-work primitives
 internal/assets/      go:embed'ed genesis block of the default chain (genesis.db)
-docs/                 extra documentation links
+docs/                 PROTOCOL.md (the p2p protocol), LINKS.md
 ```
 
 Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `privateDb`, `chainParams`,
@@ -53,8 +69,9 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
   short doc comments on functions.
 - Prefer the standard library (`slices`, `maps`, `errors.Is`, `os.ReadFile`, `net/http` pattern mux, `any`).
   Don't add dependencies without a strong reason.
-- Don't run networking code in tests; the P2P layer uses package-level singletons and dials real hosts.
-  Unit-test the pure packages and the deterministic functions in `internal/daisy`.
+- Tests must not reach outside hosts. The P2P layer uses package-level singletons; test handlers over `net.Pipe` or
+  loopback, as `p2p_test.go`, `protocol_test.go` and `p2psync_test.go` do. Timeouts and limits which tests need to shrink
+  are package variables. Unit-test the pure packages and the deterministic functions in `internal/daisy`.
 
 ## Protocol, address book, NAT
 
@@ -92,7 +109,8 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
   the chain in `blockchainVerifyEverything` passes no "now", so that check is skipped); a signer may not have signed any of
   the previous `floor(N/2)` blocks of the branch (`recentSignersOf`, `recentSignerWindow`); low-S signatures; key ops signed
   over `dcrypto.KeyOpMessage` (op, genesis hash, key hash); key ops need a majority of the active signatories before the
-  block, `KeyOpQuorum` = `floor(N/2)+1`, at every height (so a minority can't add keys it controls). The genesis block's key ops use the old `SignPublicKeyHash` format, also in `newchain`.
+  block, `KeyOpQuorum` = `floor(N/2)+1`, at every height (so a minority can't add keys it controls). The genesis block's
+  key ops use the old `SignPublicKeyHash` format, also in `newchain`.
 - Tests: with `testChain`, the timestamps of the blocks advance a second per block from a genesis a day in the past
   (`newBlockAt` sets one explicitly); `tc.next(prev)` picks a signer who is allowed to sign (in turn if possible), because
   `tc.inTurn` may return a signer that signed too recently. A scenario with two signatories can't have one of them sign
@@ -174,6 +192,13 @@ These were found in a review and are tracked here so they aren't mistaken for in
 - With few signatories the recently-signed rule needs most of them online: with two, both (see `consensus.go`).
 - Fork choice is by score only; there is no finality, and a branch deeper than `maxReorgDepth` is never accepted,
   so a node that was offline for longer than that during a fork must be re-created (`daisy pull`).
+- `Block.QuickCheck` runs while `chainLock` is held (only for blocks whose signatures are valid, with a 5 minute limit),
+  so a signatory can still stall block acceptance with a huge block.
+- If two nodes dial each other at the same moment, each may drop a different one of the two connections; they reconnect
+  on the next dial. An attacker which shares an IP address with an honest node can still get that node's newer connection
+  dropped as a duplicate.
+- `daisy pull` puts the server's host in the address book with the default p2p port, which is wrong when the node uses
+  another one (harmless: the address fails and is forgotten).
 - `mining.CountStartZeroBits` counts zero bits across all bytes rather than only leading ones (the PoW
   code is unused).
 - `cfg.httpPort` is unexported, so `http_port` in the JSON config file is silently ignored.

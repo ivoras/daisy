@@ -42,8 +42,8 @@ The blockchain is basically very well suited to data exchange between otherwise 
 
 * ✔ Add a `daisy pull` command similar to "docker pull" which would replicate a blockchain from an existing node
 * ✔ Make creating new blockchains from scratch possible without changing the code
-* ✔ Implement the "URL" encoding for block transfers: so the data in the JSON messages isn't block data, but an URL to the block data.
-* ✔ Blocks are transferred over the p2p connection (so nodes behind a NAT work), the protocol is versioned, there are DNS seeds, lists of peers, mDNS, UPnP / NAT-PMP port forwarding and an address book which is hard to fill with a few malicious peers
+* ✔ Blocks are transferred over the p2p connection (so nodes behind a NAT work), the protocol is versioned, there are DNS seeds, lists of peers, mDNS, UPnP / NAT-PMP port forwarding and an address book which is hard to fill with a few malicious peers. (The earlier "URL" and inline encodings of blocks are gone.)
+* ✔ Security review of the crypto, consensus and p2p code: key operation signatures bound to the operation and the chain, a majority quorum, block timestamps and a limit on how often a signatory can sign, limits on everything a peer can make a node do, and SQLite hardening of the block files received from peers
 * Implement nicer error handling when replying to messages
 * Refactor db..., action... and blockchain... funcs into struct methods
 * Reimplement P2P as a WebSockets protocol, allowing HTTP REST APIs such as getblock to be served from the same port.
@@ -110,7 +110,7 @@ Talks / presentations I gave about Daisy:
     * The validity of the SQLite files
     * The presence of a special tables named `_meta` and `_keys`,
     * The validity of the previous block hash in the `_meta` table
-    * The previous block hash is signed with a key which is one of the accepted private keys, i.e. signatories, i.e. which is present in the previous blocks' `_keys` table. The signatures must be in the canonical "low-S" form (`daisy` always makes them that way).
+    * The block's hash and the previous block hash are signed with a key which is one of the accepted private keys, i.e. signatories, i.e. which has been added by the `_keys` table of an earlier block and not revoked. The signatures must be in the canonical "low-S" form (`daisy` always makes them that way).
     * The block has a `Timestamp` in its `_meta` table, which is later than the timestamp of the previous block by at least the block period, and not more than 15 seconds in the future, see "Limiting how fast a branch can grow" below.
     * The signatory did not sign one of the last `floor(N/2)` blocks of the branch, where `N` is the number of valid signatories, see below.
     * The `_keys` table contains new signatory keys additions and revocations. Both operations must be signed by a number of currently valid signatories, which is a majority of them (the *quorum*, see below).
@@ -128,7 +128,7 @@ Any signatory may sign a block at any time, so two of them can extend the same b
 * The branch whose tip has the highest total score is the best chain. If the scores are equal, the tip with the lower block hash wins.
 * A branch that forks off more than 128 blocks below the tip is ignored.
 
-Nobody is prevented from signing out of turn, so a signatory who is offline never blocks the others, but a block out of turn loses against a block in turn. With a single signatory every block scores 2 and the best chain is simply the longest one. `daisy signimportblock` tells whether the new block is in turn.
+Signing out of turn is allowed, so a signatory who is offline doesn't stop the others (within the limit described in the next section), but a block out of turn loses against a block in turn. With a single signatory every block scores 2 and the best chain is simply the longest one. `daisy signimportblock` tells whether the new block is in turn.
 
 ### Limiting how fast a branch can grow
 
@@ -159,6 +159,7 @@ To be accepted as blocks, the SQLite database files have some soft and hard rest
 
 * The databases MUST NOT be created with the "WAL" journal mode. They SHOULD be created with the "OFF" journal mode.
 * The databases SHOULD be created with the smallest possible page size, i.e. 512 bytes.
+* A block file MUST NOT be larger than 1 GiB (`signimportblock` refuses it, and other nodes wouldn't accept it).
 * `_meta` and `_keys` MUST be real tables (not views or virtual tables), `_keys` MUST NOT have more than 1000 records, and the file MUST pass SQLite's `PRAGMA quick_check`. Everything else in a block is up to its creator: views, triggers, indexes and generated columns of the user's own tables are fine.
 
 Block files come from other nodes, so they are opened read-only and with the hardening of SQLite which fits: `trusted_schema` is off (views and triggers in a block can't call functions that are not safe for that), the connection is `query_only`, the limits of SQLite (the size of a value and of a statement, the depth of expressions, no `ATTACH`) are lowered, the page cache is small, and the metadata of a block is read with a time limit. See `internal/daisy/blockdb.go`. This applies to `daisy query`, too.
@@ -183,7 +184,7 @@ What is signed is not just the hash of the key, but a message that says what is 
 
 where `genesis_block_hash` and `key_hash` are the raw 32 bytes of the hashes (without the `1:` prefix), and `op` is the single letter `A` (add) or `R` (revoke), the `op` column of the record. A signature that approved adding a key is therefore no good for revoking it, and a signature on one chain is no good on another one. The signatures must be low-S. The key operations in the *genesis block* (height 0) are the exception: they are signed in the old format (the signature of the key hash alone, any S), because the genesis block of the default chain was made that way and it can't change. The genesis block is pinned by its hash in the chain parameters, so that is the one and only genesis rule; `daisy newchain` uses it, too.
 
-For example, if `Q` is 3, to add a key `K` to the list of accepted keys, there must be exactly 3 records in the `_keys` table pertaining to `K`. Each of the records must contain a valid signature by a different, already accepted key. The key `K` can be then used to sign new blocks immediately after the block which contain this records has been accepted.
+For example, if `Q` is 3, to add a key `K` to the list of accepted keys, there must be at least 3 records in the `_keys` table pertaining to `K`. Each of the records must contain a valid signature by a different, already accepted key. The key `K` can be then used to sign new blocks immediately after the block which contain this records has been accepted.
 
 # Basic crypto
 
