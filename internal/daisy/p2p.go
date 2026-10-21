@@ -34,8 +34,7 @@ type p2pMsgHelloStruct struct {
 	ChainHeight int      `json:"chain_height"`
 	MyPeers     []string `json:"my_peers"`
 
-	// The last block of the sender's best chain, and the total score of the chain (see blockScore). Older versions
-	// don't send these, in which case only the heights can be compared.
+	// The last block of the sender's best chain, and the total score of the chain (see blockScore)
 	TipHash    string `json:"tip_hash"`
 	ChainScore int    `json:"chain_score"`
 
@@ -748,20 +747,31 @@ func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
 		p2pc.conn.Close()
 		return
 	}
+	tipHash, err := msg.GetString("tip_hash")
+	if err != nil {
+		log.Println(p2pc.address, err)
+		p2pc.conn.Close()
+		return
+	}
+	chainScore, err := msg.GetInt("chain_score")
+	if err != nil {
+		log.Println(p2pc.address, err)
+		p2pc.conn.Close()
+		return
+	}
 	peerID, err := msg.GetInt64("p2p_id")
 	if err != nil {
 		log.Println(p2pc.address, err)
 		p2pc.conn.Close()
 		return
 	}
-	protocol, minProtocol := 1, 1 // A node which doesn't say speaks the original protocol
-	if v, err := msg.GetInt("protocol"); err == nil {
-		protocol = v
+	// A node which doesn't say which versions it speaks is of an old version which isn't supported
+	protocol, protoErr := msg.GetInt("protocol")
+	minProtocol, minProtoErr := msg.GetInt("min_protocol")
+	if err = errors.Join(protoErr, minProtoErr); err == nil {
+		err = p2pCheckProtocol(protocol, minProtocol)
 	}
-	if v, err := msg.GetInt("min_protocol"); err == nil {
-		minProtocol = v
-	}
-	if err = p2pCheckProtocol(protocol, minProtocol); err != nil {
+	if err != nil {
 		log.Printf("Not talking to %v: %v", p2pc.address, err)
 		if p2pc.outbound {
 			p2pCoordinator.badPeers.Add(p2pc.address)
@@ -819,11 +829,7 @@ func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
 		log.Println(err)
 		return
 	}
-	better := p2pc.chainHeight > tip.Height
-	if tipHash, err := msg.GetString("tip_hash"); err == nil && tipHash != "" && tipHash != tip.Hash {
-		score, _ := msg.GetInt("chain_score")
-		better = better || score > tip.TotalScore || (score == tip.TotalScore && tipHash < tip.Hash)
-	}
+	better := tipHash != tip.Hash && (chainScore > tip.TotalScore || (chainScore == tip.TotalScore && tipHash < tip.Hash))
 	if better {
 		p2pCtrlSend(p2pCtrlMessage{msgType: p2pCtrlSearchForBlocks, payload: p2pSearchRequest{p2pc, p2pc.chainHeight}})
 	}

@@ -65,7 +65,8 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
   reading; the file is opened on the first `nextMessage`). A peer's `getblock` requests go through `requestBlockToSend`:
   2 senders at a time, the rest wait as hashes (bounded), duplicates are dropped. Received chunks are checked for order and
   total size, bounded per connection, per host and globally (`p2pIncoming`), and the finished file is hashed before `acceptBlock`.
-- Protocol 3 is the only one spoken (`p2pMinProtocolVersion`); the `http` and `zlib-base64` block encodings are gone.
+- Protocol 3 is the only one spoken (`p2pMinProtocolVersion`); versions 1 and 2 are gone (don't reuse their numbers). The
+  hello must have `protocol`, `min_protocol`, `chain_height`, `tip_hash` and `chain_score`.
   `getblockhashes`/`blockhashes` are limited to `p2pMaxBlockHashes` and walked page by page (`p2psync.go`, `syncState`).
 - `addrbook.go` is the only place that writes the `peers` table (`abAdd`, `abGood`, `abFailed`, `abSelect`...). Peers
   are made known by gossip, seeds, lists and mDNS through `p2pCtrlConnectPeers` -> `handleConnectPeers`, which only puts them

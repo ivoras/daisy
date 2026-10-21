@@ -24,19 +24,14 @@ import (
  * The versions of the p2p protocol.
  *
  * Every node says in its hello which version of the protocol it speaks ("protocol") and the oldest version that it
- * is willing to talk to ("min_protocol"). Two nodes talk if each of them is new enough for the other. A node which
- * doesn't say anything speaks version 1.
+ * is willing to talk to ("min_protocol"). Two nodes talk if each of them is new enough for the other. A hello without
+ * these fields is from a node of an old, unsupported version, and the connection is closed.
  *
- *  1  The original protocol. Blocks are sent either as a message with the zlib-compressed, base64 encoded block
- *     ("zlib-base64"), or as the URL of the block on the sender's HTTP server ("http"). The latter does not work if the
- *     sender is behind a NAT.
- *  2  Blocks are sent in chunks over the p2p connection ("chunked" encoding), so only the connection which the node
- *     itself has opened is needed. The hello says which address the peer sees us at ("observed_host"), and there is the
- *     "reachable" message.
- *  3  Blocks are only sent in chunks (the "zlib-base64" and "http" encodings are gone). A "getblockhashes" request
- *     covers at most p2pMaxBlockHashes heights, and the answer is clamped to that, so long ranges are fetched page by
- *     page. A "block" must be signed by a key which the receiver knows, or be a block which it has asked for. There is
- *     a "ping" message to keep idle connections open, and a connection which is silent for too long is closed.
+ * Version 3 is the oldest one there is: versions 1 and 2 were never deployed, and their support has been removed (their
+ * numbers are not reused, so that such nodes are told apart). Blocks are sent in chunks over the p2p connection. A
+ * "getblockhashes" request covers at most p2pMaxBlockHashes heights, and the answer is clamped to that, so long ranges
+ * are fetched page by page. A "block" must be signed by a key which the receiver knows, or be a block which it has asked
+ * for. There is a "ping" message to keep idle connections open, and a connection which is silent for too long is closed.
  *
  * Messages and fields which a node doesn't know are ignored. That's how most additions are made. Adding a version is for
  * the cases where the other side needs to know that it can use something new, or must not be talked to.

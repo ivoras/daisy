@@ -87,7 +87,7 @@ func TestConnectionRequestsManyBlocks(t *testing.T) {
 	remote.SetDeadline(time.Now().Add(5 * time.Second))
 	hello := util.JSONifyBytes(map[string]any{
 		"root": chainParams.GenesisBlockHash, "msg": p2pMsgHello, "p2p_id": 1, "version": "test", "chain_height": 0, "my_peers": []string{},
-		"protocol": p2pProtocolVersion, "min_protocol": p2pMinProtocolVersion,
+		"protocol": p2pProtocolVersion, "min_protocol": p2pMinProtocolVersion, "tip_hash": "", "chain_score": 0,
 	})
 	if _, err := remote.Write(append(hello, '\n')); err != nil {
 		t.Fatal(err)

@@ -29,11 +29,8 @@ func drainCtrl() []p2pCtrlMessage {
 
 func helloMsg(id int, height int, tipHash string, score int) util.StrIfMap {
 	m := util.StrIfMap{"version": "test", "chain_height": float64(height), "p2p_id": float64(id), "my_peers": []any{},
-		"protocol": float64(p2pProtocolVersion), "min_protocol": float64(p2pMinProtocolVersion)}
-	if tipHash != "" {
-		m["tip_hash"] = tipHash
-		m["chain_score"] = float64(score)
-	}
+		"protocol": float64(p2pProtocolVersion), "min_protocol": float64(p2pMinProtocolVersion),
+		"tip_hash": tipHash, "chain_score": float64(score)}
 	return m
 }
 
@@ -65,9 +62,7 @@ func TestHelloTriggersSearchForBetterChains(t *testing.T) {
 		score   int
 		search  bool
 	}{
-		{"higher, from an old version", 5, "", 0, true},
-		{"the same height, from an old version", 2, "", 0, false},
-		{"lower, from an old version", 1, "", 0, false},
+		{"higher, but with a lower score (the height doesn't count)", 5, other, tip.TotalScore - 1, false},
 		{"the same tip", 2, tip.Hash, tip.TotalScore, false},
 		{"a different tip with a higher score at the same height", 2, other, tip.TotalScore + 1, true},
 		{"a different tip with a higher score, but lower", 1, other, tip.TotalScore + 1, true},

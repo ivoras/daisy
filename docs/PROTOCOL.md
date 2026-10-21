@@ -30,22 +30,18 @@ A host can have at most 4 inbound connections to a node at the same time, and a 
 | field | meaning |
 |---|---|
 | `version` | the name of the software, only informational |
-| `protocol` | the version of this protocol which the node speaks. Absent: 1 |
-| `min_protocol` | the oldest version which the node is willing to talk to. Absent: 1 |
-| `chain_height`, `tip_hash`, `chain_score` | the best chain of the node. Absent in the hello of the oldest nodes |
+| `protocol` | the version of this protocol which the node speaks. Required |
+| `min_protocol` | the oldest version which the node is willing to talk to. Required |
+| `chain_height`, `tip_hash`, `chain_score` | the best chain of the node. Required; the peer's chain is better if its score is higher (or equal, with a lower tip hash) |
 | `my_peers` | addresses of peers that the node is connected to and that accept connections |
-| `observed_host` | the address (no port) at which the sender sees the receiver. Since version 2 |
+| `observed_host` | the address (no port) at which the sender sees the receiver |
 
 Two nodes talk only if each is new enough for the other: `peer.protocol >= our min_protocol` and `peer.min_protocol <= our protocol`.
-Otherwise the connection is closed (and not retried for a while). A node uses a feature only if the peer's version has it.
+A hello without the required fields is from a node of an old version, and is treated the same way. Otherwise the connection is
+closed (and not retried for a while). A node uses a feature only if the peer's version has it.
 
-| version | what it added |
-|---|---|
-| 1 | the original protocol |
-| 2 | blocks sent in chunks over the p2p connection; `observed_host`; the `reachable` message |
-| 3 | only the chunked block encoding (`http` and `zlib-base64` are gone); limits on `getblockhashes` and `blockhashes`; blocks are checked before they are received; the `ping` message |
-
-Version 3 is also the oldest version which is supported (`min_protocol`), nodes of versions 1 and 2 are not talked to.
+The current version is 3, and it is also the oldest one: versions 1 and 2 were never deployed and are not supported. Their
+numbers are not reused, so that such nodes are kept apart.
 
 **Changing the protocol.** Adding an optional field or a message that old nodes can ignore needs no new version. A new version is for
 when the peer has to know that it may use something (so it doesn't send what the other side can't handle), or when nodes must be

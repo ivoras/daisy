@@ -21,8 +21,8 @@ func TestProtocolVersionCheck(t *testing.T) {
 		ok            bool
 	}{
 		{"the same", p2pProtocolVersion, p2pMinProtocolVersion, true},
-		{"an old node", 2, 1, false},
-		{"a node which says nothing speaks protocol 1", 1, 1, false},
+		{"a node of version 1", 1, 1, false},
+		{"a node of version 2", 2, 1, false},
 		{"a newer node which still talks to us", p2pProtocolVersion + 5, p2pProtocolVersion, true},
 		{"a newer node which doesn't talk to old ones", p2pProtocolVersion + 5, p2pProtocolVersion + 1, false},
 		{"a node too old for us", p2pMinProtocolVersion - 1, 1, false},
@@ -43,6 +43,15 @@ func TestHelloVersions(t *testing.T) {
 	legacy.handleMsgHello(hello0)
 	if legacy.handshaken {
 		t.Error("a node of the original protocol has been accepted")
+	}
+	// ... and so is one without its chain's tip and score
+	noTip, _ := newPipeConnection(t, "203.0.113.4:2017")
+	hello1 := helloMsg(3004, 0, "", 0)
+	delete(hello1, "tip_hash")
+	delete(hello1, "chain_score")
+	noTip.handleMsgHello(hello1)
+	if noTip.handshaken {
+		t.Error("a hello without the tip of the chain has been accepted")
 	}
 	// ... and one with the fields
 	current, _ := newPipeConnection(t, "203.0.113.2:2017")

@@ -249,7 +249,7 @@ func TestIdleConnectionIsClosedButPingsKeepItOpen(t *testing.T) {
 		}
 	}
 	send(map[string]any{"msg": p2pMsgHello, "version": "test", "chain_height": 0, "my_peers": []string{},
-		"protocol": p2pProtocolVersion, "min_protocol": p2pMinProtocolVersion})
+		"protocol": p2pProtocolVersion, "min_protocol": p2pMinProtocolVersion, "tip_hash": "", "chain_score": 0})
 
 	// Longer than the idle timeout, with only pings
 	pingsReceived := 0
