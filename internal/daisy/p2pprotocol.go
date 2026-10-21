@@ -432,6 +432,12 @@ func (s *selfInfoType) addSelfHost(host string) {
 	})
 }
 
+func (s *selfInfoType) getExternal() string {
+	var host string
+	s.lock.With(func() { host = s.external })
+	return host
+}
+
 func (s *selfInfoType) setExternal(host string) {
 	s.lock.With(func() { s.external = host })
 }

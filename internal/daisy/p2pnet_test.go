@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -177,13 +178,38 @@ func TestDownloadHTTPBlock(t *testing.T) {
 func TestHandleBlockDoesNotFetchFromOtherHosts(t *testing.T) {
 	setupTestSysDbs(t)
 	var victimHits, peerHits atomic.Int32
+	var peerRequestsLock sync.Mutex
+	var peerRequests []string
 
-	// The victim is a different host than the peer: 127.0.0.2 vs. 127.0.0.1
-	victimListener, err := net.Listen("tcp", "127.0.0.2:0")
-	if err != nil {
-		t.Skip("cannot listen on 127.0.0.2:", err)
+	var victim *httptest.Server
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		peerHits.Add(1)
+		peerRequestsLock.Lock()
+		peerRequests = append(peerRequests, r.Host+r.URL.String())
+		peerRequestsLock.Unlock()
+		http.Redirect(w, r, victim.URL+"/block/1", http.StatusFound)
+	}))
+	defer peer.Close()
+	_, peerPort, _ := net.SplitHostPort(peer.Listener.Addr().String())
+
+	// The victim is a different host than the peer: 127.0.0.2 vs. 127.0.0.1. (It must not have the same port number
+	// as the peer, otherwise the address of the peer with the port of the victim is the peer.)
+	var victimListener net.Listener
+	for range 20 {
+		l, err := net.Listen("tcp", "127.0.0.2:0")
+		if err != nil {
+			t.Skip("cannot listen on 127.0.0.2:", err)
+		}
+		if _, port, _ := net.SplitHostPort(l.Addr().String()); port != peerPort {
+			victimListener = l
+			break
+		}
+		l.Close()
 	}
-	victim := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	if victimListener == nil {
+		t.Skip("cannot get a port for the victim")
+	}
+	victim = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		victimHits.Add(1)
 	}))
 	victim.Listener.Close()
@@ -191,19 +217,12 @@ func TestHandleBlockDoesNotFetchFromOtherHosts(t *testing.T) {
 	victim.Start()
 	defer victim.Close()
 
-	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		peerHits.Add(1)
-		http.Redirect(w, r, victim.URL+"/block/1", http.StatusFound)
-	}))
-	defer peer.Close()
-
 	conn, err := net.Dial("tcp", peer.Listener.Addr().String()) // RemoteAddr() is the peer
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
 	p2pc := newTestConnection(conn, conn.RemoteAddr().String())
-	_, peerPort, _ := net.SplitHostPort(peer.Listener.Addr().String())
 
 	handle := func(url string, size int64) {
 		p2pc.handleBlock(util.StrIfMap{
@@ -221,7 +240,9 @@ func TestHandleBlockDoesNotFetchFromOtherHosts(t *testing.T) {
 	// 2. The peer's own port, but it redirects to the victim
 	handle("http://example.invalid:"+peerPort+"/block/1", 100)
 	if peerHits.Load() != 1 {
-		t.Fatalf("expected one request to the peer, got %d", peerHits.Load())
+		peerRequestsLock.Lock()
+		defer peerRequestsLock.Unlock()
+		t.Fatalf("expected one request to the peer, got %d: %q", peerHits.Load(), peerRequests)
 	}
 	if victimHits.Load() != 0 {
 		t.Fatal("followed a redirect to another host")

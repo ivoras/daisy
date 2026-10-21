@@ -274,9 +274,9 @@ func abCounts() (newAddresses, tried int) {
 	return abCount("tried=0"), abCount("tried=1")
 }
 
-// abList returns the addresses of the peers that are the most likely to be alive, to tell others about
+// abList returns the addresses of the peers that we have talked to and are the most likely to be alive, to tell others about
 func abList(limit int) []string {
-	rows, err := mainDb.Query("SELECT address FROM peers WHERE tried=1 AND failures < ? ORDER BY last_success DESC, permanent DESC LIMIT ?", peerMaxFailures, limit)
+	rows, err := mainDb.Query("SELECT address FROM peers WHERE tried=1 AND last_success > 0 AND failures < ? ORDER BY last_success DESC LIMIT ?", peerMaxFailures, limit)
 	if err != nil {
 		log.Println("abList:", err)
 		return nil

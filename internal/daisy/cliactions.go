@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -429,6 +432,27 @@ func actionNewChain(jsonFilename string) {
 	log.Println("All done.")
 }
 
+// pullPeers adds the node which we are pulling from, and the peers which it knows, to the address book (best effort)
+func pullPeers(baseURL string) {
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Hostname() == "" {
+		return
+	}
+	abAdd(net.JoinHostPort(u.Hostname(), strconv.Itoa(DefaultP2PPort)), "pull")
+	peers, err := fetchPeerList(baseURL + "peers")
+	if err != nil {
+		log.Println("Cannot get the list of peers:", err)
+		return
+	}
+	added := 0
+	for _, p := range peers {
+		if abAdd(p, "pull") {
+			added++
+		}
+	}
+	log.Println("Added", added, "peers from", baseURL)
+}
+
 // The largest chainparams.json accepted by pull
 const maxChainParamsSize = 1 << 20
 
@@ -514,6 +538,7 @@ func actionPull(baseURL string) {
 	dbInit()
 	dbClearSavedPeers()
 	cryptoInit()
+	pullPeers(baseURL)
 
 	blk, err := OpenBlockFile(blockFilename)
 	if err != nil {

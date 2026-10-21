@@ -634,7 +634,7 @@ func (p2pc *p2pConnection) handleConnection() {
 		select {
 		case msg := <-p2pc.chanFromPeer:
 			if _error, err := msg.GetString("_error"); err == nil {
-				log.Printf("Fatal error from %v: %v", p2pc.address, _error)
+				log.Printf("Closing the connection to %v: %v", p2pc.address, _error)
 				return
 			}
 			cmd, err := msg.GetString("msg")
@@ -1032,6 +1032,7 @@ func (p2pc *p2pConnection) handleBlock(msg util.StrIfMap) {
 func p2pConnectPeer(address string) (*p2pConnection, error) {
 	addr, err := net.ResolveTCPAddr("tcp", address)
 	if err != nil {
+		abFailed(address) // A name that doesn't resolve is as good as a peer that doesn't answer
 		return nil, err
 	}
 
