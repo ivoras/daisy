@@ -114,6 +114,12 @@ Order of work: 1) P2P resource limits (#5–#8, #12, #13), 2) peer management an
   the 5 s expiry of `recentlyRequestedBlocks` repeats it every 5 s. Cap the entries handled per message and only
   accept heights near the range we asked for.
 
+- [ ] **#14 A single signatory can still add keys on a young chain (high).**
+  Found when reviewing the fix for #2. `EffectiveQuorum` is `min(QuorumForHeight(h), ⌊N/2⌋+1)`, and
+  `QuorumForHeight` is 1 below height 149, so before then any one signatory can add keys it controls with only its
+  own signature, become the majority, and get around the recently-signed rule. Fix: key ops need a majority of the
+  active signatories (⌊N/2⌋+1) at every height; decide what's left of `QuorumForHeight` and update README and tests.
+
 ## What looks solid
 
 - ECDSA uses `SignASN1`/`VerifyASN1` with `crypto/rand`; the private DB is mode 0600; loaded keys are checked
