@@ -11,20 +11,6 @@ import (
 	"github.com/ivoras/daisy/internal/util"
 )
 
-func TestQuorumForHeight(t *testing.T) {
-	// Table from the README (the first term of the quorum, see EffectiveQuorum)
-	for _, tc := range []struct{ height, want int }{
-		{1, 1}, {148, 1},
-		{149, 10}, {245, 11}, {404, 12}, {666, 13}, {1097, 14}, {1809, 15},
-		{2981, 16}, {4915, 17}, {8104, 18}, {13360, 19}, {22027, 20},
-		{36316, 21}, {59875, 22}, {98716, 23}, {162755, 24},
-	} {
-		if got := QuorumForHeight(tc.height); got != tc.want {
-			t.Errorf("QuorumForHeight(%d) = %d, want %d", tc.height, got, tc.want)
-		}
-	}
-}
-
 func TestBlockchainGetFilename(t *testing.T) {
 	blockchainSubdirectory = "/data/blocks"
 	for h, want := range map[int]string{

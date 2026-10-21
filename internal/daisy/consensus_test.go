@@ -15,15 +15,10 @@ import (
 	"github.com/ivoras/daisy/internal/assets"
 )
 
-func TestEffectiveQuorum(t *testing.T) {
-	for _, tt := range []struct{ height, active, want int }{
-		{1, 1, 1}, {1, 5, 1}, {148, 100, 1}, // Below the height where the quorum starts to grow
-		{149, 1, 1}, {149, 2, 2}, {149, 3, 2}, {149, 4, 3}, {149, 5, 3}, // A majority of few signatories
-		{149, 18, 10}, {149, 19, 10}, {149, 100, 10}, // The quorum of the height, if there are enough of them
-		{162755, 3, 2}, {162755, 47, 24}, {162755, 48, 24}, {162755, 1000, 24},
-	} {
-		if got := EffectiveQuorum(tt.height, tt.active); got != tt.want {
-			t.Errorf("EffectiveQuorum(%d, %d) = %d, want %d", tt.height, tt.active, got, tt.want)
+func TestKeyOpQuorum(t *testing.T) {
+	for active, want := range map[int]int{1: 1, 2: 2, 3: 2, 4: 3, 5: 3, 6: 4, 7: 4, 18: 10, 100: 51} {
+		if got := KeyOpQuorum(active); got != want {
+			t.Errorf("KeyOpQuorum(%d) = %d, want %d", active, got, want)
 		}
 	}
 }
@@ -206,7 +201,7 @@ func TestRecentlySignedRule(t *testing.T) {
 	t.Run("revoking a key changes the limit", func(t *testing.T) {
 		s := newSigners(2)
 		tc := setupTestChain(t, s...)
-		b1 := tc.newBlock(tc.genesis.hash, s[0], "revoke s1", testKeyOp{op: "R", target: s[1], signers: []*testSigner{s[0]}})
+		b1 := tc.newBlock(tc.genesis.hash, s[0], "revoke s1", testKeyOp{op: "R", target: s[1], signers: []*testSigner{s[0], s[1]}})
 		tc.mustAccept(b1, blockNewTip)
 		// With a single signatory there's no limit, so s[0] can sign again at once
 		tc.mustAccept(tc.newBlock(b1.hash, s[0], "2"), blockNewTip)
@@ -243,13 +238,14 @@ func TestHighSSignaturesAreRefused(t *testing.T) {
 }
 
 func TestKeyOpSignaturesCantBeReplayed(t *testing.T) {
-	a, b, k := newTestSigner(t), newTestSigner(t), newTestSigner(t)
-	tc := setupTestChain(t, a, b)
+	a, b, c, k := newTestSigner(t), newTestSigner(t), newTestSigner(t), newTestSigner(t)
+	tc := setupTestChain(t, a, b, c)
+	trio := []*testSigner{a, b, c} // A majority of the four signatories after k is added
 	tc.signers[k.hash] = k
 	genesis := tc.genesis.hash
 
 	adder := tc.inTurn(genesis)
-	add := tc.newBlock(genesis, adder, "add k", testKeyOp{op: "A", target: k, signers: []*testSigner{adder}})
+	add := tc.newBlock(genesis, adder, "add k", testKeyOp{op: "A", target: k, signers: []*testSigner{a, b}})
 	tc.mustAccept(add, blockNewTip)
 	addedOps, err := readKeyOps(add.file)
 	if err != nil {
@@ -263,47 +259,37 @@ func TestKeyOpSignaturesCantBeReplayed(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 	// ... and the same if the signatories sign the "A" message again
-	tc.mustRefuse(tc.newBlock(add.hash, replayer, "signed as adds", testKeyOp{op: "R", signAs: "A", target: k, signers: []*testSigner{replayer}}))
+	tc.mustRefuse(tc.newBlock(add.hash, replayer, "signed as adds", testKeyOp{op: "R", signAs: "A", target: k, signers: trio}))
 	// The key stays
-	if got := tc.activeKeys(); len(got) != 3 {
+	if got := tc.activeKeys(); len(got) != 4 {
 		t.Fatalf("active keys: %v", got)
 	}
 
 	// A key op for another chain is not valid on this one, even if it's the same operation on the same key
 	otherChain := strings.Repeat("ab", 32)
-	tc.mustRefuse(tc.newBlock(add.hash, replayer, "from another chain", testKeyOp{op: "R", signGenesis: otherChain, target: k, signers: []*testSigner{replayer}}))
+	tc.mustRefuse(tc.newBlock(add.hash, replayer, "from another chain", testKeyOp{op: "R", signGenesis: otherChain, target: k, signers: trio}))
 	m := newTestSigner(t)
-	tc.mustRefuse(tc.newBlock(add.hash, replayer, "add m from another chain", testKeyOp{op: "A", signGenesis: otherChain, target: m, signers: []*testSigner{replayer}}))
+	tc.mustRefuse(tc.newBlock(add.hash, replayer, "add m from another chain", testKeyOp{op: "A", signGenesis: otherChain, target: m, signers: trio}))
 
 	// A signature of the right operation is fine
-	revoke := tc.newBlock(add.hash, replayer, "revoke k", testKeyOp{op: "R", target: k, signers: []*testSigner{replayer}})
+	revoke := tc.newBlock(add.hash, replayer, "revoke k", testKeyOp{op: "R", target: k, signers: trio})
 	tc.mustAccept(revoke, blockNewTip)
-	if got := tc.activeKeys(); len(got) != 2 {
+	if got := tc.activeKeys(); len(got) != 3 {
 		t.Fatalf("active keys: %v", got)
 	}
 	tc.checkConsistent()
 }
 
-// The quorum of the height is more than the signatories there are: a majority of them has to be enough
-func TestKeyOpQuorumIsLimitedByTheSignatories(t *testing.T) {
-	if testing.Short() {
-		t.Skip("builds a long chain")
-	}
+// A key operation needs a majority of the active signatories even on a young chain, so that a minority can't add keys
+// it controls to get around the recently-signed rule
+func TestKeyOpsNeedAMajorityAtEveryHeight(t *testing.T) {
 	signers := []*testSigner{newTestSigner(t), newTestSigner(t), newTestSigner(t)}
 	tc := setupTestChain(t, signers...)
 	prev := tc.genesis.hash
-	for i := 1; i <= 150; i++ {
-		b := tc.newBlock(prev, tc.next(prev), fmt.Sprint(i))
-		tc.mustAccept(b, blockNewTip)
-		prev = b.hash
-	}
-	if q := QuorumForHeight(151); q != 10 {
-		t.Fatalf("the quorum at height 151 is %d", q)
-	}
 	k := newTestSigner(t)
 	tc.signers[k.hash] = k
 	signer := tc.next(prev)
-	// One signature is not enough: a majority of three is two
+	// One signature is not enough at height 1: a majority of three is two
 	oneSig := tc.newBlock(prev, signer, "one signature", testKeyOp{op: "A", target: k, signers: []*testSigner{signers[0]}})
 	if err := tc.mustRefuse(oneSig); !strings.Contains(err.Error(), "Quorum of 2") {
 		t.Errorf("unexpected error: %v", err)
@@ -318,7 +304,12 @@ func TestKeyOpQuorumIsLimitedByTheSignatories(t *testing.T) {
 	tc.signers[l.hash] = l
 	signer = tc.next(twoSigs.hash)
 	tc.mustRefuse(tc.newBlock(twoSigs.hash, signer, "two of four", testKeyOp{op: "A", target: l, signers: []*testSigner{signers[0], signers[1]}}))
-	tc.mustAccept(tc.newBlock(twoSigs.hash, signer, "three of four", testKeyOp{op: "A", target: l, signers: []*testSigner{signers[0], signers[1], signers[2]}}), blockNewTip)
+	three := tc.newBlock(twoSigs.hash, signer, "three of four", testKeyOp{op: "A", target: l, signers: []*testSigner{signers[0], signers[1], signers[2]}})
+	tc.mustAccept(three, blockNewTip)
+	// Revoking needs a majority too (three of five)
+	signer = tc.next(three.hash)
+	tc.mustRefuse(tc.newBlock(three.hash, signer, "revoke with one", testKeyOp{op: "R", target: l, signers: []*testSigner{signers[0]}}))
+	tc.mustAccept(tc.newBlock(three.hash, signer, "revoke with three", testKeyOp{op: "R", target: l, signers: []*testSigner{signers[0], signers[1], k}}), blockNewTip)
 	tc.checkConsistent()
 }
 

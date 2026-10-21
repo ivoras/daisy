@@ -214,16 +214,16 @@ func TestForkLongerBranchWins(t *testing.T) {
 
 // The keys added or revoked by the blocks which are replaced must be undone, and those of the new blocks applied.
 func TestReorganizationUndoesKeyOps(t *testing.T) {
-	a, b, k := newTestSigner(t), newTestSigner(t), newTestSigner(t)
-	tc := setupTestChain(t, a, b)
+	a, b, c, k := newTestSigner(t), newTestSigner(t), newTestSigner(t), newTestSigner(t)
+	tc := setupTestChain(t, a, b, c)
 	tc.signers[k.hash] = k
 	genesis := tc.genesis.hash
 
 	// Branch P adds the key K, and K signs blocks
 	p1signer := tc.inTurn(genesis)
-	p1 := tc.newBlock(genesis, p1signer, "p1", testKeyOp{op: "A", target: k, signers: []*testSigner{p1signer}})
+	p1 := tc.newBlock(genesis, p1signer, "p1", testKeyOp{op: "A", target: k, signers: []*testSigner{a, b}})
 	tc.mustAccept(p1, blockNewTip)
-	if got := tc.activeKeys(); len(got) != 3 || !slices.Contains(got, k.hash) {
+	if got := tc.activeKeys(); len(got) != 4 || !slices.Contains(got, k.hash) {
 		t.Fatalf("the key was not added: %v", got)
 	}
 	p2 := tc.newBlock(p1.hash, k, "p2 signed by the new key")
@@ -243,7 +243,7 @@ func TestReorganizationUndoesKeyOps(t *testing.T) {
 	if tc.tip().Hash != q3.hash {
 		t.Fatalf("branch Q must be the best chain, the tip is at height %d", tc.tip().Height)
 	}
-	if got := tc.activeKeys(); slices.Contains(got, k.hash) || len(got) != 2 {
+	if got := tc.activeKeys(); slices.Contains(got, k.hash) || len(got) != 3 {
 		t.Fatalf("the key must be gone with its branch: %v", got)
 	}
 	// A block signed by K can't be added to Q
@@ -261,7 +261,7 @@ func TestReorganizationUndoesKeyOps(t *testing.T) {
 	if tc.tip().Hash != last.hash {
 		t.Fatalf("branch P must be the best chain, tip is at height %d", tc.tip().Height)
 	}
-	if got := tc.activeKeys(); len(got) != 3 || !slices.Contains(got, k.hash) {
+	if got := tc.activeKeys(); len(got) != 4 || !slices.Contains(got, k.hash) {
 		t.Fatalf("the key must be back: %v", got)
 	}
 	tc.checkConsistent()
@@ -273,7 +273,7 @@ func TestRevokedKeyCantSign(t *testing.T) {
 	genesis := tc.genesis.hash
 
 	s := tc.inTurn(genesis)
-	revoke := tc.newBlock(genesis, s, "revoke b", testKeyOp{op: "R", target: b, signers: []*testSigner{s}})
+	revoke := tc.newBlock(genesis, s, "revoke b", testKeyOp{op: "R", target: b, signers: []*testSigner{a, b}})
 	tc.mustAccept(revoke, blockNewTip)
 	if got := tc.activeKeys(); len(got) != 1 || got[0] != a.hash {
 		t.Fatalf("active keys: %v", got)
@@ -308,11 +308,11 @@ func TestInvalidBlocksAreRefused(t *testing.T) {
 	tc.mustRefuse(bad)
 
 	// A new key added by somebody who isn't a signatory
-	tc.mustRefuse(tc.newBlock(genesis, a, "bad key op", testKeyOp{op: "A", target: stranger, signers: []*testSigner{stranger}}))
+	tc.mustRefuse(tc.newBlock(genesis, a, "bad key op", testKeyOp{op: "A", target: stranger, signers: []*testSigner{a, stranger}}))
 	// An existing key can't be added again
-	tc.mustRefuse(tc.newBlock(genesis, a, "add b again", testKeyOp{op: "A", target: b, signers: []*testSigner{a}}))
+	tc.mustRefuse(tc.newBlock(genesis, a, "add b again", testKeyOp{op: "A", target: b, signers: []*testSigner{a, b}}))
 	// ... and an unknown key can't be revoked
-	tc.mustRefuse(tc.newBlock(genesis, a, "revoke a stranger", testKeyOp{op: "R", target: stranger, signers: []*testSigner{a}}))
+	tc.mustRefuse(tc.newBlock(genesis, a, "revoke a stranger", testKeyOp{op: "R", target: stranger, signers: []*testSigner{a, b}}))
 
 	if tc.tip().Height != 0 {
 		t.Errorf("none of the blocks should have been accepted, the tip is at %d", tc.tip().Height)
@@ -456,7 +456,7 @@ func TestMigrationOfOldDatabase(t *testing.T) {
 		s := tc.inTurn(prev)
 		var ops []testKeyOp
 		if i == 3 {
-			ops = append(ops, testKeyOp{op: "R", target: b, signers: []*testSigner{s}})
+			ops = append(ops, testKeyOp{op: "R", target: b, signers: []*testSigner{a, b}})
 		}
 		blk := tc.newBlock(prev, s, fmt.Sprint(i), ops...)
 		tc.mustAccept(blk, blockNewTip)

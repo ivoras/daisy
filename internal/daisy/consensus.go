@@ -52,8 +52,16 @@ import (
  *
  * Key operations.
  *
- * A key operation (adding or revoking a signatory key) needs a quorum of signatures of the active signatories (see
- * EffectiveQuorum). The signatures are over a message which says which operation is signed, and on which chain
+ * A key operation (adding or revoking a signatory key) needs signatures of a majority of the active signatories before
+ * the block: floor(N/2)+1 of N, at every height above the genesis block (KeyOpQuorum). The recently-signed rule above
+ * only holds if nobody can get around it by adding keys, and with a smaller quorum a minority could do just that: with
+ * a quorum of one, any single signatory could add keys it controls, become the majority, and then sign every block.
+ * (Clique does it the same way.) The quorum used to grow with the height of the block (QuorumForHeight, about 2*ln(H)
+ * from block 149 on) and was capped by the majority. That is gone: below the cap it was a minority (unsafe), and above
+ * the majority it would only make the keys of a chain with few signatories impossible to change. There is no reason
+ * for the quorum to depend on the height at all. The genesis block adds the first keys with the signature of just one
+ * of them (the creator, who is the only signatory before it); that exception cannot be avoided, and the block is
+ * pinned by its hash. The signatures are over a message which says which operation is signed, and on which chain
  * (dcrypto.KeyOpMessage), so they can't be reused for another operation, or on another chain. The genesis block is
  * the exception: the key operations in it are signed in the old format, which only signs the hash of the key (the
  * embedded genesis block is made that way, and it can't change, as its hash is the identity of the chain). The
@@ -109,11 +117,10 @@ func recentSignerWindow(keys *keySet) int {
 	return len(keys.active()) / 2
 }
 
-// EffectiveQuorum returns the number of signatures which a key operation in a block of the given height needs, if
-// there are the given number of active signatories before the block. It's QuorumForHeight(), but never more than a
-// majority of the signatories, so that a chain with few signatories can still add and revoke keys.
-func EffectiveQuorum(height, activeSigners int) int {
-	return min(QuorumForHeight(height), activeSigners/2+1)
+// KeyOpQuorum returns the number of signatures which a key operation needs, if there are the given number of active
+// signatories before the block: a majority of them, whatever the height of the block.
+func KeyOpQuorum(activeSigners int) int {
+	return activeSigners/2 + 1
 }
 
 // blockContext is what validateBlock needs to know about the chain and the world, besides the signatory keys
@@ -171,7 +178,7 @@ func validateBlock(blk *Block, height int, keys *keySet, ctx blockContext) (map[
 	if err != nil {
 		return nil, err
 	}
-	if err = validateKeyOps(ops, height, keys, ctx.genesisHash); err != nil {
+	if err = validateKeyOps(ops, keys, ctx.genesisHash); err != nil {
 		return nil, err
 	}
 	return ops, nil
@@ -192,11 +199,11 @@ func validateTimestamp(blk *Block, ctx blockContext) error {
 	return nil
 }
 
-// validateKeyOps checks the key operations of a block of the given height: each of them must be signed by a quorum
+// validateKeyOps checks the key operations of a block: each of them must be signed by a quorum (a majority)
 // of different signatories, and it must make sense (only keys which are not known are added, only keys which are
 // valid are revoked).
-func validateKeyOps(ops map[string][]BlockKeyOp, height int, keys *keySet, genesisHash string) error {
-	quorum := EffectiveQuorum(height, len(keys.active()))
+func validateKeyOps(ops map[string][]BlockKeyOp, keys *keySet, genesisHash string) error {
+	quorum := KeyOpQuorum(len(keys.active()))
 	for key, keyOps := range ops {
 		signers := make(map[string]bool)
 		for _, keyOp := range keyOps {

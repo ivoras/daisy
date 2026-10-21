@@ -68,6 +68,9 @@ type testChain struct {
 	genesis testBlock
 	counter int
 	times   map[string]time.Time // The timestamps of the blocks, by hash
+
+	// SQL to run in the blocks which are created from now on, to add user objects (views, triggers...) to them
+	extraSQL []string
 }
 
 // setupTestChain creates a blockchain in a new data directory, with a genesis block which adds all the given signers.
@@ -162,6 +165,10 @@ func (tc *testChain) newBlockAt(prev string, signer *testSigner, extra string, t
 	must(err)
 	_, err = db.Exec("INSERT INTO payload VALUES (?)", extra)
 	must(err)
+	for _, q := range tc.extraSQL {
+		_, err = db.Exec(q)
+		must(err)
+	}
 	prevSig, err := dcrypto.SignHex(signer.key, prev)
 	must(err)
 	must(dbSetMetaInt(db, "Version", CurrentBlockVersion))

@@ -2,6 +2,7 @@ package daisy
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -9,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -365,14 +365,6 @@ func verifyGenesisBlock(b *Block, keys *keySet) (map[string][]BlockKeyOp, error)
 	return ops, nil
 }
 
-// QuorumForHeight calculates the required key op quorum for the given block height
-func QuorumForHeight(h int) int {
-	if h < 149 {
-		return 1
-	}
-	return int(math.Log(float64(h)) * 2)
-}
-
 // Returns the (sharded) directory which holds the block with the given height: 64k blocks per directory
 func blockchainDirname(h int) string {
 	return filepath.Join(blockchainSubdirectory, fmt.Sprintf(rawBlockDirnameFormat, h/65536))
@@ -411,6 +403,10 @@ func OpenBlockByHeight(height int) (*Block, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = dbCheckBlockTables(b.db); err != nil {
+		b.db.Close()
+		return nil, err
+	}
 	return &b, nil
 }
 
@@ -425,6 +421,20 @@ func OpenBlockFile(fileName string) (*Block, error) {
 	if err != nil {
 		return nil, err
 	}
+	b, err := readBlockMetadata(db, fileName, hash)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	return b, nil
+}
+
+// readBlockMetadata does the work of OpenBlockFile() on the already opened database
+func readBlockMetadata(db *sql.DB, fileName, hash string) (*Block, error) {
+	if err := dbCheckBlockTables(db); err != nil {
+		return nil, err
+	}
+	var err error
 	b := Block{DbBlockchainBlock: &DbBlockchainBlock{Hash: hash}, db: db}
 	if b.Version, err = b.dbGetMetaInt("Version"); err != nil {
 		return nil, err
@@ -451,14 +461,31 @@ func OpenBlockFile(fileName string) (*Block, error) {
 	return &b, nil
 }
 
+// QuickCheck makes sure that the database of the block is not corrupt. It reads the entire file, so it's done once, to
+// the blocks which come from the outside (see acceptBlockLocked), and not every time a block is opened.
+func (b *Block) QuickCheck() error {
+	return dbQuickCheck(b.db)
+}
+
 func (b *Block) Close() error {
 	return b.db.Close()
 }
 
+// Returns a value from the _meta table within the block, with a time limit
+func (b *Block) dbGetMetaValue(key string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), blockQueryTimeout)
+	defer cancel()
+	var value string
+	if err := b.db.QueryRowContext(ctx, "SELECT value FROM _meta WHERE key=?", key).Scan(&value); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
 // Returns an integer value from the _meta table within the block
 func (b *Block) dbGetMetaInt(key string) (int, error) {
-	var value string
-	if err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value); err != nil {
+	value, err := b.dbGetMetaValue(key)
+	if err != nil {
 		return -1, err
 	}
 	return strconv.Atoi(value)
@@ -466,27 +493,22 @@ func (b *Block) dbGetMetaInt(key string) (int, error) {
 
 // Returns a timestamp value from the _meta table within the block
 func (b *Block) dbGetMetaTime(key string) (time.Time, error) {
-	var value string
-	if err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value); err != nil {
+	value, err := b.dbGetMetaValue(key)
+	if err != nil {
 		return time.Time{}, err
 	}
-	t, err := time.Parse(time.RFC3339, value)
-	return t, err
+	return time.Parse(time.RFC3339, value)
 }
 
 // Returns a string value from the _meta table within the block
 func (b *Block) dbGetMetaString(key string) (string, error) {
-	var value string
-	if err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value); err != nil {
-		return "", err
-	}
-	return value, nil
+	return b.dbGetMetaValue(key)
 }
 
 // Returns a byte blob value from the _meta table within the block (stored in the db as a hex string)
 func (b *Block) dbGetMetaHexBytes(key string) ([]byte, error) {
-	var value string
-	if err := b.db.QueryRow("SELECT value FROM _meta WHERE key=?", key).Scan(&value); err != nil {
+	value, err := b.dbGetMetaValue(key)
+	if err != nil {
 		return nil, err
 	}
 	return hex.DecodeString(value)
@@ -494,18 +516,20 @@ func (b *Block) dbGetMetaHexBytes(key string) ([]byte, error) {
 
 // Returns a map of key operations stored in the block. Map keys are public key hashes, values are lists of ops.
 func (b *Block) dbGetKeyOps() (map[string][]BlockKeyOp, error) {
-	var count int
-	if err := b.db.QueryRow("SELECT COUNT(*) FROM _keys").Scan(&count); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), blockQueryTimeout)
+	defer cancel()
+	keyOps := make(map[string][]BlockKeyOp)
+	rows, err := b.db.QueryContext(ctx, "SELECT op, pubkey_hash, pubkey, sigkey_hash, signature, COALESCE(metadata, '') FROM _keys LIMIT ?", maxBlockKeyOps+1)
+	if err != nil {
 		log.Println("Error reading db _keys")
 		return nil, err
 	}
-	keyOps := make(map[string][]BlockKeyOp)
-	rows, err := b.db.Query("SELECT op, pubkey_hash, pubkey, sigkey_hash, signature, COALESCE(metadata, '') FROM _keys")
-	if err != nil {
-		return nil, err
-	}
 	defer rows.Close()
+	numRecords := 0
 	for rows.Next() {
+		if numRecords++; numRecords > maxBlockKeyOps {
+			return nil, fmt.Errorf("The _keys table of the block has more than %d records", maxBlockKeyOps)
+		}
 		var publicKeyHex string
 		var signatureHex string
 		var metadataJSON string
@@ -537,6 +561,9 @@ func (b *Block) dbGetKeyOps() (map[string][]BlockKeyOp, error) {
 			keyOps[keyOp.publicKeyHash] = make([]BlockKeyOp, 1)
 			keyOps[keyOp.publicKeyHash][0] = keyOp
 		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
 	}
 	for hash, oneKeyOps := range keyOps {
 		for _, keyOp := range oneKeyOps {

@@ -85,7 +85,10 @@ Order of work: 1) P2P resource limits (#5–#8, #12, #13), 2) peer management an
   Fix: check the announced signature against the active keys first; only accept transfers for blocks we asked for
   or count the budget per host; check the received file's hash equals the announced one before `acceptBlock`.
 
-- [ ] **#9 SQLite opens untrusted files without hardening (medium).**
+- [x] **#9 SQLite opens untrusted files without hardening (medium).**
+  *Done:* block files open via the `sqlite3_block` driver (`mode=ro`, `query_only`, `trusted_schema=OFF`, lowered limits,
+  escaped DSN), `_meta`/`_keys` must be real tables, `quick_check` before a block is accepted, 20 s read limit, at most
+  1000 `_keys` records (`SQLITE_DBCONFIG_DEFENSIVE` isn't reachable from go-sqlite3). See `blockdb.go`, `blockdb_test.go`.
   `dbOpen(..., true)` is only `mode=ro`. A crafted block can make `_meta` or `_keys` a view running expensive
   recursive CTEs while `chainLock` is held. Fix: `PRAGMA trusted_schema=OFF`, `SQLITE_DBCONFIG_DEFENSIVE`,
   `PRAGMA query_only`; check that `_meta` and `_keys` are real tables; consider `PRAGMA quick_check` and a query
@@ -114,7 +117,9 @@ Order of work: 1) P2P resource limits (#5–#8, #12, #13), 2) peer management an
   the 5 s expiry of `recentlyRequestedBlocks` repeats it every 5 s. Cap the entries handled per message and only
   accept heights near the range we asked for.
 
-- [ ] **#14 A single signatory can still add keys on a young chain (high).**
+- [x] **#14 A single signatory can still add keys on a young chain (high).**
+  *Done:* key ops need `floor(N/2)+1` of the N active signatories at every height (`KeyOpQuorum`); `QuorumForHeight`,
+  `EffectiveQuorum` and the README table are gone. Test: `TestKeyOpsNeedAMajorityAtEveryHeight`.
   Found when reviewing the fix for #2. `EffectiveQuorum` is `min(QuorumForHeight(h), ⌊N/2⌋+1)`, and
   `QuorumForHeight` is 1 below height 149, so before then any one signatory can add keys it controls with only its
   own signature, become the majority, and get around the recently-signed rule. Fix: key ops need a majority of the
