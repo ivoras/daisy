@@ -1,17 +1,21 @@
-package main
+package daisy
 
 import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/ivoras/daisy/internal/dcrypto"
+	"github.com/ivoras/daisy/internal/util"
 )
 
 // The binary can be called with some actions, like signblock, importblock, signkey.
@@ -91,7 +95,7 @@ func actionSignImportBlock(fn string) {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	signature, err := cryptoSignHex(keypair, dbb.Hash)
+	signature, err := dcrypto.SignHex(keypair, dbb.Hash)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -125,11 +129,11 @@ func actionSignImportBlock(fn string) {
 	if err = db.Close(); err != nil {
 		log.Panic(err)
 	}
-	blockHashHex, err := hashFileToHexString(fn)
+	blockHashHex, err := util.HashFileToHexString(fn)
 	if err != nil {
 		log.Panic(err)
 	}
-	signature, err = cryptoSignHex(keypair, blockHashHex)
+	signature, err = dcrypto.SignHex(keypair, blockHashHex)
 	if err != nil {
 		log.Panic(err)
 	}
@@ -170,17 +174,17 @@ func actionQuery(q string) {
 			log.Panic(err)
 		}
 		for rows.Next() {
-			columns := make([]interface{}, len(cols))
-			columnPointers := make([]interface{}, len(cols))
+			columns := make([]any, len(cols))
+			columnPointers := make([]any, len(cols))
 			for i := range columns {
 				columnPointers[i] = &columns[i]
 			}
 			if err := rows.Scan(columnPointers...); err != nil {
 				log.Panic(err)
 			}
-			row := make(map[string]interface{})
+			row := make(map[string]any)
 			for i, colName := range cols {
-				val := columnPointers[i].(*interface{})
+				val := columnPointers[i].(*any)
 				if reflect.TypeOf(*val).String() == "[]uint8" {
 					row[colName] = string((*val).([]byte))
 				} else {
@@ -226,7 +230,7 @@ type NewChainParams struct {
 }
 
 func actionNewChain(jsonFilename string) {
-	jsonData, err := ioutil.ReadFile(jsonFilename)
+	jsonData, err := os.ReadFile(jsonFilename)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -244,7 +248,7 @@ func actionNewChain(jsonFilename string) {
 	}
 	log.Println("Creating a new blockchain from", jsonFilename)
 
-	empty, err := isDirEmpty(cfg.DataDir)
+	empty, err := util.IsDirEmpty(cfg.DataDir)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -253,8 +257,11 @@ func actionNewChain(jsonFilename string) {
 	}
 
 	ensureBlockchainSubdirectoryExists()
+	if err = blockchainEnsureBlockDir(genesisBlockHeight); err != nil {
+		log.Fatalln(err)
+	}
 	freshDb := true
-	if ncp.GenesisDb != "" && fileExists(ncp.GenesisDb) {
+	if ncp.GenesisDb != "" && util.FileExists(ncp.GenesisDb) {
 		err = blockchainCopyFile(ncp.GenesisDb, 0)
 		if err != nil {
 			log.Fatalln(err)
@@ -326,9 +333,9 @@ func actionNewChain(jsonFilename string) {
 		log.Fatalln("The impossible has happened: two attempts to get the single public key have different results:", pubKeys[0], pubKeyHash)
 	}
 	log.Println("Genesis public key:", pubKeyHash)
-	prevSig, err := cryptoSignHex(pKey, GenesisBlockPreviousBlockHash)
+	prevSig, err := dcrypto.SignHex(pKey, GenesisBlockPreviousBlockHash)
 	if err != nil {
-		log.Fatalln("cryptoSignHex", err)
+		log.Fatalln("dcrypto.SignHex", err)
 	}
 	err = dbSetMetaString(db, "PreviousBlockHashSignature", prevSig)
 	if err != nil {
@@ -344,7 +351,7 @@ func actionNewChain(jsonFilename string) {
 	if err != nil {
 		log.Fatalln("Error getting public key from db", err)
 	}
-	selfSig, err := cryptoSignPublicKeyHash(pKey, pubKeyHash)
+	selfSig, err := dcrypto.SignPublicKeyHash(pKey, pubKeyHash)
 	if err != nil {
 		log.Fatalln("Error signing publicKey", err)
 	}
@@ -360,13 +367,13 @@ func actionNewChain(jsonFilename string) {
 	}
 
 	// Hash it, sign it, generate chainparams
-	hash, err := hashFileToHexString(blockFilename)
+	hash, err := util.HashFileToHexString(blockFilename)
 	if err != nil {
 		log.Fatalln(err)
 	}
 	ncp.GenesisBlockHash = hash
 	ncp.CreatorPublicKey = pubKeyHash
-	ncp.GenesisBlockHashSignature, err = cryptoSignHex(pKey, hash)
+	ncp.GenesisBlockHashSignature, err = dcrypto.SignHex(pKey, hash)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -377,7 +384,7 @@ func actionNewChain(jsonFilename string) {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	err = ioutil.WriteFile(fmt.Sprintf("%s/%s", cfg.DataDir, chainParamsBaseName), cpJSON, 0644)
+	err = os.WriteFile(filepath.Join(cfg.DataDir, chainParamsBaseName), cpJSON, 0644)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -385,9 +392,9 @@ func actionNewChain(jsonFilename string) {
 	// Record the genesis block into the system database
 	newBlock := DbBlockchainBlock{
 		Hash:                       ncp.GenesisBlockHash,
-		HashSignature:              mustDecodeHex(ncp.GenesisBlockHashSignature),
+		HashSignature:              util.MustDecodeHex(ncp.GenesisBlockHashSignature),
 		PreviousBlockHash:          GenesisBlockPreviousBlockHash,
-		PreviousBlockHashSignature: mustDecodeHex(prevSig),
+		PreviousBlockHashSignature: util.MustDecodeHex(prevSig),
 		Version:                    CurrentBlockVersion,
 		SignaturePublicKeyHash:     pubKeyHash,
 		Height:                     0,
@@ -417,7 +424,7 @@ func actionPull(baseURL string) {
 		log.Fatalln("Error getting chainparams", cpURL, err)
 	}
 	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Fatalln("Error reading chainparams", cpURL, err)
 	}
@@ -431,20 +438,20 @@ func actionPull(baseURL string) {
 	}
 
 	// Step 2: Fetch the genesis block
-	gbURL := fmt.Sprintf("%s/block/0", baseURL)
+	gbURL := fmt.Sprintf("%sblock/0", baseURL)
 	resp, err = http.Get(gbURL)
 	if err != nil {
 		log.Fatalln("Error getting genesis block", gbURL, err)
 	}
 	defer resp.Body.Close()
-	body, err = ioutil.ReadAll(resp.Body)
+	body, err = io.ReadAll(resp.Body)
 	if err != nil {
 		log.Fatalln("Error reading genesis block", gbURL, err)
 	}
 
 	// Step 3: initialise data directories
-	if fileExists(cfg.DataDir) {
-		if empty, err := isDirEmpty(cfg.DataDir); err != nil || !empty {
+	if util.FileExists(cfg.DataDir) {
+		if empty, err := util.IsDirEmpty(cfg.DataDir); err != nil || !empty {
 			log.Fatalln("Blockchain directory must be empty", cfg.DataDir)
 		}
 	}
@@ -456,14 +463,17 @@ func actionPull(baseURL string) {
 		}
 	}
 	ensureBlockchainSubdirectoryExists()
+	if err = blockchainEnsureBlockDir(genesisBlockHeight); err != nil {
+		log.Fatalln(err)
+	}
 
 	blockFilename := blockchainGetFilename(0)
-	err = ioutil.WriteFile(blockFilename, body, 0664)
+	err = os.WriteFile(blockFilename, body, 0664)
 	if err != nil {
 		log.Fatalln("Cannot write genesis block", blockFilename, err)
 	}
 
-	hash, err := hashFileToHexString(blockFilename)
+	hash, err := util.HashFileToHexString(blockFilename)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -492,14 +502,14 @@ func actionPull(baseURL string) {
 	for kHash, ops := range kops {
 		for _, op := range ops {
 			if op.op == "A" {
-				pubKey, err := cryptoDecodePublicKeyBytes(op.publicKeyBytes)
+				pubKey, err := dcrypto.DecodePublicKeyBytes(op.publicKeyBytes)
 				if err != nil {
 					log.Fatalln("Error decoding genesis block public key", kHash, err)
 				}
-				if chainParams.CreatorPublicKey != getPubKeyHash(op.publicKeyBytes) {
+				if chainParams.CreatorPublicKey != dcrypto.PubKeyHash(op.publicKeyBytes) {
 					continue
 				}
-				if err = cryptoVerifyHex(pubKey, chainParams.GenesisBlockHash, chainParams.GenesisBlockHashSignature); err == nil {
+				if err = dcrypto.VerifyHex(pubKey, chainParams.GenesisBlockHash, chainParams.GenesisBlockHashSignature); err == nil {
 					verified = true
 					dbWritePublicKey(op.publicKeyBytes, chainParams.CreatorPublicKey, 0)
 				} else {
@@ -528,7 +538,7 @@ func actionPull(baseURL string) {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	err = ioutil.WriteFile(fmt.Sprintf("%s/%s", cfg.DataDir, chainParamsBaseName), cpJSON, 0644)
+	err = os.WriteFile(filepath.Join(cfg.DataDir, chainParamsBaseName), cpJSON, 0644)
 	if err != nil {
 		log.Fatalln(err)
 	}

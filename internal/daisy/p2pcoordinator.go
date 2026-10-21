@@ -1,10 +1,13 @@
-package main
+package daisy
 
 import (
 	"fmt"
 	"log"
 	"net"
+	"slices"
 	"time"
+
+	"github.com/ivoras/daisy/internal/util"
 )
 
 // Messages to the p2p controller goroutine
@@ -16,7 +19,7 @@ const (
 
 type p2pCtrlMessage struct {
 	msgType int
-	payload interface{}
+	payload any
 }
 
 var p2pCtrlChannel = make(chan p2pCtrlMessage, 8)
@@ -27,17 +30,17 @@ var p2pCtrlChannel = make(chan p2pCtrlMessage, 8)
 type p2pCoordinatorType struct {
 	timeTicks                chan int
 	lastTickBlockchainHeight int
-	recentlyRequestedBlocks  *StringSetWithExpiry
+	recentlyRequestedBlocks  *util.StringSetWithExpiry
 	lastReconnectTime        time.Time
-	badPeers                 *StringSetWithExpiry
+	badPeers                 *util.StringSetWithExpiry
 }
 
 // XXX: singletons in go?
 var p2pCoordinator = p2pCoordinatorType{
-	recentlyRequestedBlocks: NewStringSetWithExpiry(5 * time.Second),
+	recentlyRequestedBlocks: util.NewStringSetWithExpiry(5 * time.Second),
 	lastReconnectTime:       time.Now(),
 	timeTicks:               make(chan int),
-	badPeers:                NewStringSetWithExpiry(15 * time.Minute),
+	badPeers:                util.NewStringSetWithExpiry(15 * time.Minute),
 }
 
 func (co *p2pCoordinatorType) Run() {
@@ -63,11 +66,9 @@ func (co *p2pCoordinatorType) Run() {
 // ToDo: This is a simplistic version. Make it better by introducing quorums.
 func (co *p2pCoordinatorType) handleSearchForBlocks(p2pcStart *p2pConnection) {
 	msg := p2pMsgGetBlockHashesStruct{
-		p2pMsgHeader: p2pMsgHeader{
-			P2pID: p2pEphemeralID,
-			Root:  chainParams.GenesisBlockHash,
-			Msg:   p2pMsgGetBlockHashes,
-		},
+		P2pID:          p2pEphemeralID,
+		Root:           chainParams.GenesisBlockHash,
+		Msg:            p2pMsgGetBlockHashes,
 		MinBlockHeight: dbGetBlockchainHeight(),
 		MaxBlockHeight: p2pcStart.chainHeight,
 	}
@@ -76,10 +77,10 @@ func (co *p2pCoordinatorType) handleSearchForBlocks(p2pcStart *p2pConnection) {
 }
 
 func (co *p2pCoordinatorType) handleConnectPeers(addresses []string) {
-	localAddresses := getLocalAddresses()
+	localAddresses := util.LocalAddresses()
 
 	for _, address := range addresses {
-		host, _, err := splitAddress(address)
+		host, _, err := util.SplitAddress(address)
 		if err != nil {
 			log.Println(address, err)
 			continue
@@ -92,7 +93,7 @@ func (co *p2pCoordinatorType) handleConnectPeers(addresses []string) {
 		if err != nil {
 			continue
 		}
-		if inStrings(addr.IP.String(), localAddresses) {
+		if slices.Contains(localAddresses, addr.IP.String()) {
 			continue
 		}
 		// Detect if there's a canonical peer on the other side, somewhat brute-forceish
@@ -131,11 +132,9 @@ func (co *p2pCoordinatorType) handleTimeTick() {
 func (co *p2pCoordinatorType) floodPeersWithNewBlocks(minHeight, maxHeight int) {
 	blockHashes := dbGetHeightHashes(minHeight, maxHeight)
 	msg := p2pMsgBlockHashesStruct{
-		p2pMsgHeader: p2pMsgHeader{
-			P2pID: p2pEphemeralID,
-			Root:  chainParams.GenesisBlockHash,
-			Msg:   p2pMsgBlockHashes,
-		},
+		P2pID:  p2pEphemeralID,
+		Root:   chainParams.GenesisBlockHash,
+		Msg:    p2pMsgBlockHashes,
 		Hashes: blockHashes,
 	}
 	p2pPeers.lock.With(func() {

@@ -1,4 +1,4 @@
-package main
+package daisy
 
 const (
 	ChainConsensusPoA = 0

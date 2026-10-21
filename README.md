@@ -50,6 +50,17 @@ The blockchain is basically very well suited to data exchange between otherwise 
 * Implement a Bloom filter for tables in SQL queries, to skip querying blocks which don't have the appropriate tables.
 * Implement stochastic guarded block importing: if there apparently is a new block in the network: ask a number of peers if they've seen it before importing it.
 
+# Building
+
+Daisy requires Go 1.27 or newer and a C compiler (the SQLite driver uses cgo).
+
+```
+go build ./cmd/daisy
+go test ./...
+```
+
+The source layout is described in [AGENTS.md](AGENTS.md).
+
 # Usage
 
 When the command line app is started, Daisy will initialise its databases and install the default blockchain. It will then connect to a list of peers it maintains and fetch new blocks, if any.
