@@ -91,18 +91,11 @@ func (co *p2pCoordinatorType) Run() {
 }
 
 // Retrieves block hashes from a node which apparently has a better chain than we do. The range starts a bit
-// before our tip, so that the blocks of a competing branch, which forks off below it, are found too.
+// before our tip, so that the blocks of a competing branch, which forks off below it, are found too. The peer's chain is
+// gone through page by page (see syncState).
 // ToDo: This is a simplistic version. Make it better by introducing quorums.
 func (co *p2pCoordinatorType) handleSearchForBlocks(req p2pSearchRequest) {
-	msg := p2pMsgGetBlockHashesStruct{
-		P2pID:          p2pEphemeralID,
-		Root:           chainParams.GenesisBlockHash,
-		Msg:            p2pMsgGetBlockHashes,
-		MinBlockHeight: max(0, dbGetBlockchainHeight()-reorgSearchWindow),
-		MaxBlockHeight: req.peerHeight,
-	}
-	log.Printf("Searching for blocks from %d to %d", msg.MinBlockHeight, msg.MaxBlockHeight)
-	req.peer.send(msg)
+	req.peer.startSync(req.peerHeight)
 }
 
 // The payload of p2pCtrlConnectPeers: addresses of peers that we have heard of
@@ -212,6 +205,9 @@ func (co *p2pCoordinatorType) handleTimeTick() {
 }
 
 func (co *p2pCoordinatorType) floodPeersWithNewBlocks(minHeight, maxHeight int) {
+	// Only the newest hashes fit in a message. A peer which is further behind gets to the older blocks by asking for them
+	// (it does that when it sees hashes of blocks that are too far ahead of its chain).
+	minHeight = max(minHeight, maxHeight-p2pMaxBlockHashes+1)
 	blockHashes := dbGetHeightHashes(minHeight, maxHeight)
 	msg := p2pMsgBlockHashesStruct{
 		P2pID:  p2pEphemeralID,

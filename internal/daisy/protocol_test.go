@@ -21,7 +21,8 @@ func TestProtocolVersionCheck(t *testing.T) {
 		ok            bool
 	}{
 		{"the same", p2pProtocolVersion, p2pMinProtocolVersion, true},
-		{"an old node", 1, 1, true},
+		{"an old node", 2, 1, false},
+		{"a node which says nothing speaks protocol 1", 1, 1, false},
 		{"a newer node which still talks to us", p2pProtocolVersion + 5, p2pProtocolVersion, true},
 		{"a newer node which doesn't talk to old ones", p2pProtocolVersion + 5, p2pProtocolVersion + 1, false},
 		{"a node too old for us", p2pMinProtocolVersion - 1, 1, false},
@@ -34,16 +35,19 @@ func TestProtocolVersionCheck(t *testing.T) {
 
 func TestHelloVersions(t *testing.T) {
 	setupTestSysDbs(t)
-	// A hello without the version fields is from the original protocol
+	// A hello without the version fields is from the original protocol, which is not supported any more
 	legacy, _ := newPipeConnection(t, "203.0.113.1:2017")
-	legacy.handleMsgHello(helloMsg(3001, 0, "", 0))
-	if !legacy.handshaken || legacy.protocol.Load() != 1 {
-		t.Errorf("legacy: handshaken=%v protocol=%d", legacy.handshaken, legacy.protocol.Load())
+	hello0 := helloMsg(3001, 0, "", 0)
+	delete(hello0, "protocol")
+	delete(hello0, "min_protocol")
+	legacy.handleMsgHello(hello0)
+	if legacy.handshaken {
+		t.Error("a node of the original protocol has been accepted")
 	}
-	// ... and one with them
+	// ... and one with the fields
 	current, _ := newPipeConnection(t, "203.0.113.2:2017")
 	hello := helloMsg(3002, 0, "", 0)
-	hello["protocol"], hello["min_protocol"] = float64(p2pProtocolVersion), float64(1)
+	hello["protocol"], hello["min_protocol"] = float64(p2pProtocolVersion), float64(p2pMinProtocolVersion)
 	current.handleMsgHello(hello)
 	if !current.handshaken || current.protocol.Load() != p2pProtocolVersion {
 		t.Errorf("current: handshaken=%v protocol=%d", current.handshaken, current.protocol.Load())
@@ -69,10 +73,7 @@ func TestHelloVersions(t *testing.T) {
 // Sends the block in the file the way the sender does, and delivers it to p2pc the way the receiver gets it
 func transferBlockFile(t *testing.T, p2pc *p2pConnection, hash string, sig []byte, file string, mangle func(i int, msg map[string]any) map[string]any) {
 	t.Helper()
-	sender, err := newBlockSender(hash, sig, file)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sender := newBlockSender(hash, sig, file)
 	defer sender.close()
 	for i := 0; ; i++ {
 		msg, done, err := sender.nextMessage()
@@ -117,13 +118,13 @@ func TestBlockTransferInChunks(t *testing.T) {
 	}
 
 	p2pc, _ := newPipeConnection(t, "203.0.113.10:2017")
-	before := p2pIncomingBytes.Load()
+	before := p2pIncoming.totalBytes()
 	transferBlockFile(t, p2pc, b1.hash, b1.sig, b1.file, nil)
 	if tc.tip().Hash != b1.hash {
 		t.Fatal("the block that was sent in chunks has not been accepted")
 	}
-	if len(p2pc.incoming) != 0 || p2pIncomingBytes.Load() != before {
-		t.Errorf("the transfer was not cleaned up: %d transfers, %d bytes", len(p2pc.incoming), p2pIncomingBytes.Load()-before)
+	if len(p2pc.incoming) != 0 || p2pIncoming.totalBytes() != before {
+		t.Errorf("the transfer was not cleaned up: %d transfers, %d bytes", len(p2pc.incoming), p2pIncoming.totalBytes()-before)
 	}
 	tc.checkConsistent()
 }
@@ -133,7 +134,7 @@ func TestBlockTransferAbuse(t *testing.T) {
 	a := newTestSigner(t)
 	tc := setupTestChain(t, a)
 	b1 := tc.newBlock(tc.genesis.hash, a, "abused")
-	before := p2pIncomingBytes.Load()
+	before := p2pIncoming.totalBytes()
 
 	try := func(name string, mangle func(i int, m map[string]any) map[string]any) {
 		t.Helper()
@@ -142,7 +143,7 @@ func TestBlockTransferAbuse(t *testing.T) {
 		if tc.tip().Height != 0 {
 			t.Fatalf("%s: the block has been accepted", name)
 		}
-		if len(p2pc.incoming) != 0 || p2pIncomingBytes.Load() != before {
+		if len(p2pc.incoming) != 0 || p2pIncoming.totalBytes() != before {
 			t.Errorf("%s: the transfer was not cleaned up", name)
 		}
 	}
@@ -182,10 +183,28 @@ func TestBlockTransferAbuse(t *testing.T) {
 		}
 		return m
 	})
-	// The data are fine, but they are not the block which is announced... it's only the signature that decides
+	// The signature isn't one of a key that we know: nothing is even started
 	try("a wrong signature", func(i int, m map[string]any) map[string]any {
 		if i == 0 {
 			m["hash_signature"] = strings.Repeat("00", 70)
+		}
+		return m
+	})
+	try("a signature that is not hex", func(i int, m map[string]any) map[string]any {
+		if i == 0 {
+			m["hash_signature"] = "zz"
+		}
+		return m
+	})
+	try("a hash that is not a hash", func(i int, m map[string]any) map[string]any {
+		if i == 0 {
+			m["hash"] = "hello"
+		}
+		return m
+	})
+	try("an encoding of the old protocol", func(i int, m map[string]any) map[string]any {
+		if i == 0 {
+			m["encoding"], m["data"] = "zlib-base64", "AAAA"
 		}
 		return m
 	})
@@ -198,26 +217,63 @@ func TestBlockTransferAbuse(t *testing.T) {
 }
 
 func TestTransferLimits(t *testing.T) {
+	old := p2pIncoming
+	defer func() { p2pIncoming = old }()
+	p2pIncoming = newIncomingBudget(10000, 3000)
+
 	p2pc, _ := newPipeConnection(t, "203.0.113.13:2017")
-	before := p2pIncomingBytes.Load()
 	for i := 0; i < p2pMaxIncomingTransfers+3; i++ {
 		p2pc.startIncomingBlock(fmt.Sprintf("hash%d", i), "00", 1000)
 	}
 	if len(p2pc.incoming) != p2pMaxIncomingTransfers {
 		t.Errorf("%d transfers at the same time, the limit is %d", len(p2pc.incoming), p2pMaxIncomingTransfers)
 	}
-	// The budget is for all the connections
 	p2pc.abortAllIncomingBlocks()
-	if p2pIncomingBytes.Load() != before {
+	if p2pIncoming.totalBytes() != 0 || p2pIncoming.hostBytes("203.0.113.13") != 0 {
 		t.Fatal("the budget was not released")
 	}
-	p2pIncomingBytes.Add(p2pMaxIncomingBytes - 500)
-	defer p2pIncomingBytes.Add(-(p2pMaxIncomingBytes - 500))
-	p2pc.startIncomingBlock("too much", "00", 1000)
-	if len(p2pc.incoming) != 0 {
-		t.Error("a transfer started although there is not enough room")
+
+	// One host can't have more than its share, whatever the number of its connections
+	var conns []*p2pConnection
+	for i := range 4 {
+		c, _ := newPipeConnection(t, fmt.Sprintf("203.0.113.14:%d", 40000+i))
+		conns = append(conns, c)
+		c.startIncomingBlock(fmt.Sprintf("host-hash%d", i), "00", 1000)
+		defer c.abortAllIncomingBlocks()
 	}
+	got := 0
+	for _, c := range conns {
+		got += len(c.incoming)
+	}
+	if got != 3 || p2pIncoming.hostBytes("203.0.113.14") != 3000 {
+		t.Errorf("%d transfers from one host, %d bytes", got, p2pIncoming.hostBytes("203.0.113.14"))
+	}
+	// ... and the others still have room
+	other, _ := newPipeConnection(t, "203.0.113.15:2017")
+	other.startIncomingBlock("other", "00", 1000)
+	defer other.abortAllIncomingBlocks()
+	if len(other.incoming) != 1 {
+		t.Error("another host has been shut out by the first one")
+	}
+
+	// The total is limited too
+	big, _ := newPipeConnection(t, "203.0.113.16:2017")
+	big.startIncomingBlock("too much", "00", 7000) // Over the share of the host
+	if len(big.incoming) != 0 {
+		t.Error("a transfer bigger than the share of the host started")
+	}
+	p2pIncoming = newIncomingBudget(1500, 1000)
+	a, _ := newPipeConnection(t, "203.0.113.17:2017")
+	b, _ := newPipeConnection(t, "203.0.113.18:2017")
+	a.startIncomingBlock("a", "00", 1000)
+	b.startIncomingBlock("b", "00", 1000)
+	defer a.abortAllIncomingBlocks()
+	if len(a.incoming) != 1 || len(b.incoming) != 0 {
+		t.Error("the total budget is not respected")
+	}
+
 	// A transfer which has stalled is dropped
+	p2pIncoming = newIncomingBudget(10000, 3000)
 	p2pc.startIncomingBlock("stalled", "00", 100)
 	p2pc.incoming["stalled"].lastActivity = time.Now().Add(-2 * p2pTransferTimeout)
 	p2pc.expireIncomingBlocks()
@@ -251,11 +307,7 @@ func TestOutboxInterleavesBlocksAndMessages(t *testing.T) {
 		}
 	}()
 
-	sender, err := newBlockSender(b1.hash, b1.sig, b1.file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p2pc.send(sender)
+	p2pc.send(newBlockSender(b1.hash, b1.sig, b1.file))
 	p2pc.send(map[string]string{"msg": "queued-with-the-block"})
 	flushed := 0
 	for range 100 {
@@ -301,32 +353,6 @@ func TestOutboxInterleavesBlocksAndMessages(t *testing.T) {
 	}
 	if kinds[len(kinds)-1] != p2pMsgBlockChunk {
 		t.Errorf("the block is not complete: %v", kinds)
-	}
-}
-
-func TestGetBlockUsesChunksForNewPeersAndHTTPForOld(t *testing.T) {
-	a := newTestSigner(t)
-	tc := setupTestChain(t, a)
-	b1 := tc.newBlock(tc.genesis.hash, a, "1")
-	tc.mustAccept(b1, blockNewTip)
-
-	modern, _ := newPipeConnection(t, "203.0.113.15:2017")
-	modern.protocol.Store(2)
-	modern.handleGetBlock(util.StrIfMap{"hash": b1.hash})
-	if len(modern.outbox) != 1 {
-		t.Fatalf("%d messages", len(modern.outbox))
-	}
-	if _, ok := modern.outbox[0].(*blockSender); !ok {
-		t.Errorf("a protocol 2 peer should get the block in chunks, got %T", modern.outbox[0])
-	}
-	modern.discardOutbox()
-
-	old, _ := newPipeConnection(t, "203.0.113.16:2017")
-	old.protocol.Store(1)
-	old.handleGetBlock(util.StrIfMap{"hash": b1.hash})
-	msg, ok := old.outbox[0].(p2pMsgBlockStruct)
-	if !ok || msg.Encoding != "http" {
-		t.Errorf("a protocol 1 peer should be told where to download the block, got %T %+v", old.outbox[0], old.outbox[0])
 	}
 }
 

@@ -61,8 +61,12 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
 - `docs/PROTOCOL.md` is the reference. Change it with the code. `p2pProtocolVersion` / `p2pMinProtocolVersion` (in
   `p2pprotocol.go`) are bumped only when a peer must know that it may use something new, or must be kept away;
   adding an optional field or message needs no bump (unknown ones are ignored). Gate new behaviour on `p2pc.protocol`.
-- Blocks to protocol 2 peers go through `blockSender` (a `lazyMessage` in the outbox: one chunk per flush pass so the
-  connection keeps reading). Received chunks are checked for order and total size, bounded per connection and globally.
+- Blocks go through `blockSender` (a `lazyMessage` in the outbox: one chunk per flush pass so the connection keeps
+  reading; the file is opened on the first `nextMessage`). A peer's `getblock` requests go through `requestBlockToSend`:
+  2 senders at a time, the rest wait as hashes (bounded), duplicates are dropped. Received chunks are checked for order and
+  total size, bounded per connection, per host and globally (`p2pIncoming`), and the finished file is hashed before `acceptBlock`.
+- Protocol 3 is the only one spoken (`p2pMinProtocolVersion`); the `http` and `zlib-base64` block encodings are gone.
+  `getblockhashes`/`blockhashes` are limited to `p2pMaxBlockHashes` and walked page by page (`p2psync.go`, `syncState`).
 - `addrbook.go` is the only place that writes the `peers` table (`abAdd`, `abGood`, `abFailed`, `abSelect`...). Peers
   are made known by gossip, seeds, lists and mDNS through `p2pCtrlConnectPeers` -> `handleConnectPeers`, which only puts them
   in the book; `maintainConnections` (every tick, and after new addresses) decides whom to connect to. An address
@@ -109,15 +113,19 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
   a channel that the same goroutine is the only reader of.
 - Never block while holding `p2pPeers.lock`: use `p2pPeers.Snapshot()` and work on the copy.
 - Never block on the coordinator: use `p2pCtrlSend()` (drops the hint if the coordinator is busy).
-- Every network operation needs a timeout: `p2pDialer`, `p2pHTTPClient`, and the write deadline in `sendMsg`.
+- Every network operation needs a timeout: `p2pDialer` and the write deadline in `sendMsg`. A connection must say hello
+  within `p2pHelloTimeout`, and then be heard from within `p2pIdleTimeout` (every message resets it; nodes `ping` each other
+  every `p2pPingInterval`). At most `p2pMaxInboundPerHost` inbound connections per IP.
 
 ## Untrusted input from peers
 
 - Limits live in `internal/daisy/p2pnet.go`: messages 64 MiB (`p2pMaxMessageSize`), blocks 1 GiB
-  (`p2pMaxBlockSize`), inline (`zlib-base64`) blocks only up to 32 MiB. Read peer data through `readLine`,
-  `copyExactly` and the `download*Block` helpers, never with unbounded `ReadBytes`/`io.Copy`/`io.ReadAll`.
-- The `http` block encoding: the URL from the peer is only a hint. `blockHTTPURL` keeps its port and block
-  number, but always connects to the peer's own address; redirects are not followed.
+  (`p2pMaxBlockSize`). Read peer data through `readLine` and the chunk handlers, never with unbounded
+  `ReadBytes`/`io.Copy`/`io.ReadAll`.
+- A `block` message is only acted on (budget reserved, temp file created) if we asked that peer for the block (`noteRequested`)
+  or its `hash_signature` verifies against a key in the `pubkeys` table, whatever the key's state (`signedByKnownSignatory`).
+  `blockhashes` heights must be in the range we asked for or near our tip, and at most `p2pMaxBlockHashes` are handled.
+  A second `hello` on a connection is ignored.
 - Bans: `badPeers` holds dialed `ip:port` addresses (set for outbound duplicate/self connections),
   `badHosts` holds IPs which violated the protocol (oversized or malformed messages). Inbound connections have
   random source ports, so never key a ban on an inbound connection's `ip:port`.

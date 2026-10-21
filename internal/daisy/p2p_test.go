@@ -2,7 +2,9 @@ package daisy
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -85,6 +87,7 @@ func TestConnectionRequestsManyBlocks(t *testing.T) {
 	remote.SetDeadline(time.Now().Add(5 * time.Second))
 	hello := util.JSONifyBytes(map[string]any{
 		"root": chainParams.GenesisBlockHash, "msg": p2pMsgHello, "p2p_id": 1, "version": "test", "chain_height": 0, "my_peers": []string{},
+		"protocol": p2pProtocolVersion, "min_protocol": p2pMinProtocolVersion,
 	})
 	if _, err := remote.Write(append(hello, '\n')); err != nil {
 		t.Fatal(err)
@@ -93,7 +96,7 @@ func TestConnectionRequestsManyBlocks(t *testing.T) {
 	// The hashes must be unique per run: recently requested ones are (rightly) not requested again
 	hashes := map[string]string{}
 	for h := 1; h <= numBlocks; h++ {
-		hashes[fmt.Sprint(h)] = fmt.Sprintf("test-many-blocks-%d-%d", time.Now().UnixNano(), h)
+		hashes[fmt.Sprint(h)] = testHash(fmt.Sprintf("test-many-blocks-%d-%d", time.Now().UnixNano(), h))
 	}
 	announce := util.JSONifyBytes(map[string]any{
 		"root": chainParams.GenesisBlockHash, "msg": p2pMsgBlockHashes, "p2p_id": 1, "hashes": hashes,
@@ -182,4 +185,10 @@ func TestCtrlSendDoesNotBlock(t *testing.T) {
 	for len(p2pCtrlChannel) > 0 { // Don't leave junk for other tests
 		<-p2pCtrlChannel
 	}
+}
+
+// A made up, valid looking hash of a block
+func testHash(seed string) string {
+	h := sha256.Sum256([]byte(seed))
+	return hex.EncodeToString(h[:])
 }

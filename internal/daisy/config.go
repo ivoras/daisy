@@ -22,15 +22,14 @@ const DefaultConfigFile = "/etc/daisy/config.json"
 const DefaultDataDir = ".daisy"
 
 var cfg struct {
-	configFile     string
-	P2pPort        int    `json:"p2p_port"`
-	DataDir        string `json:"data_dir"`
-	httpPort       int
-	showHelp       bool
-	faster         bool
-	UPnP           bool `json:"upnp"` // Ask the router to forward the ports (UPnP, NAT-PMP)
-	MDNS           bool `json:"mdns"` // Advertise the node on the local network, and look for others
-	p2pBlockInline bool
+	configFile string
+	P2pPort    int    `json:"p2p_port"`
+	DataDir    string `json:"data_dir"`
+	httpPort   int
+	showHelp   bool
+	faster     bool
+	UPnP       bool `json:"upnp"` // Ask the router to forward the ports (UPnP, NAT-PMP)
+	MDNS       bool `json:"mdns"` // Advertise the node on the local network, and look for others
 }
 
 // Initialises defaults, parses command line
@@ -66,7 +65,6 @@ func configInit() {
 	flag.BoolVar(&cfg.UPnP, "upnp", cfg.UPnP, "Ask the router to forward the ports to this computer (UPnP, NAT-PMP)")
 	flag.BoolVar(&cfg.MDNS, "mdns", cfg.MDNS, "Advertise the node on the local network, and look for other nodes there (mDNS)")
 	flag.BoolVar(&cfg.faster, "faster", false, "Be faster when starting up")
-	flag.BoolVar(&cfg.p2pBlockInline, "p2pblockinline", false, "Send blocks to peers inline instead of over HTTP")
 	flag.Parse()
 
 	if cfg.showHelp {
