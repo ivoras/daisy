@@ -80,6 +80,17 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
 - Never block on the coordinator: use `p2pCtrlSend()` (drops the hint if the coordinator is busy).
 - Every network operation needs a timeout: `p2pDialer`, `p2pHTTPClient`, and the write deadline in `sendMsg`.
 
+## Untrusted input from peers
+
+- Limits live in `internal/daisy/p2pnet.go`: messages 64 MiB (`p2pMaxMessageSize`), blocks 1 GiB
+  (`p2pMaxBlockSize`), inline (`zlib-base64`) blocks only up to 32 MiB. Read peer data through `readLine`,
+  `copyExactly` and the `download*Block` helpers, never with unbounded `ReadBytes`/`io.Copy`/`io.ReadAll`.
+- The `http` block encoding: the URL from the peer is only a hint. `blockHTTPURL` keeps its port and block
+  number, but always connects to the peer's own address; redirects are not followed.
+- Bans: `badPeers` holds dialed `ip:port` addresses (set for outbound duplicate/self connections),
+  `badHosts` holds IPs which violated the protocol (oversized or malformed messages). Inbound connections have
+  random source ports, so never key a ban on an inbound connection's `ip:port`.
+
 ## Known problems (not yet fixed)
 
 These were found in a review and are tracked here so they aren't mistaken for intended behaviour:
@@ -90,8 +101,8 @@ These were found in a review and are tracked here so they aren't mistaken for in
 - `blockchainVerifyEverything` doesn't check `prev_hash` linkage between consecutive blocks and
   resolves signing keys against the final key set rather than the set at that height.
 - No fork handling: a block at an existing height is rejected ("longest chain wins" is not implemented).
-- P2P: peer-supplied `http` block URLs are fetched without restriction (SSRF), block/line sizes are
-  unbounded, and `badPeers` matching for inbound connections includes the ephemeral source port.
+- P2P has no limit on the number of simultaneous connections, no encryption or authentication, and peer
+  discovery trusts whatever peers gossip (see the discovery notes in the PR history / README roadmap).
 - `mining.CountStartZeroBits` counts zero bits across all bytes rather than only leading ones (the PoW
   code is unused).
 - `cfg.httpPort` is unexported, so `http_port` in the JSON config file is silently ignored.

@@ -74,6 +74,11 @@ func processPreBlockchainActions() bool {
 // Opens the given block file (SQLite database), creates metadata tables in it, signes the
 // block with one of the private keys, and accepts the resulting block into the blockchain.
 func actionSignImportBlock(fn string) {
+	if st, err := os.Stat(fn); err != nil {
+		log.Fatalln(err)
+	} else if st.Size() > p2pMaxBlockSize {
+		log.Fatalf("%s is %d bytes, but other nodes will not accept blocks larger than %d bytes", fn, st.Size(), int64(p2pMaxBlockSize))
+	}
 	db, err := dbOpen(fn, false)
 	if err != nil {
 		log.Fatalln(err)
@@ -413,20 +418,38 @@ func actionNewChain(jsonFilename string) {
 	log.Println("All done.")
 }
 
+// The largest chainparams.json accepted by pull
+const maxChainParamsSize = 1 << 20
+
+// httpGetLimited fetches a URL into memory, refusing anything that isn't a "200 OK" or is larger than maxSize.
+func httpGetLimited(url string, maxSize int64) ([]byte, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP status %s", resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxSize {
+		return nil, fmt.Errorf("the response is larger than the maximum of %d bytes", maxSize)
+	}
+	return body, nil
+}
+
 func actionPull(baseURL string) {
 	if !strings.HasSuffix(baseURL, "/") {
 		baseURL = baseURL + "/"
 	}
 	// Step 1: fetch chainparams
 	cpURL := fmt.Sprintf("%schainparams.json", baseURL)
-	resp, err := http.Get(cpURL)
+	body, err := httpGetLimited(cpURL, maxChainParamsSize)
 	if err != nil {
 		log.Fatalln("Error getting chainparams", cpURL, err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Fatalln("Error reading chainparams", cpURL, err)
 	}
 	err = json.Unmarshal(body, &chainParams)
 	if err != nil {
@@ -439,14 +462,9 @@ func actionPull(baseURL string) {
 
 	// Step 2: Fetch the genesis block
 	gbURL := fmt.Sprintf("%sblock/0", baseURL)
-	resp, err = http.Get(gbURL)
+	body, err = httpGetLimited(gbURL, p2pMaxBlockSize)
 	if err != nil {
 		log.Fatalln("Error getting genesis block", gbURL, err)
-	}
-	defer resp.Body.Close()
-	body, err = io.ReadAll(resp.Body)
-	if err != nil {
-		log.Fatalln("Error reading genesis block", gbURL, err)
 	}
 
 	// Step 3: initialise data directories

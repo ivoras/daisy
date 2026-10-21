@@ -92,6 +92,7 @@ var p2pEphemeralID = randInt63() & 0xffffffffffff
 type p2pConnection struct {
 	conn              net.Conn
 	address           string // host:port
+	outbound          bool   // we have connected to the peer (as opposed to the peer connecting to us)
 	peer              *bufio.ReadWriter
 	peerID            int64
 	isConnectable     bool // using the default port
@@ -124,6 +125,8 @@ var p2pDialer = &net.Dialer{Timeout: p2pDialTimeout}
 // HTTP client for fetching blocks from peers (the "http" block encoding).
 var p2pHTTPClient = &http.Client{
 	Timeout: 30 * time.Minute, // The whole exchange including the body, blocks can be large
+	// Never follow redirects: they would lead away from the peer we have agreed to talk to
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	Transport: &http.Transport{
 		DialContext:           p2pDialer.DialContext,
 		TLSHandshakeTimeout:   p2pDialTimeout,
@@ -349,13 +352,15 @@ func p2pServer() {
 			sysEventChannel <- sysEventMessage{event: eventQuit}
 			return
 		}
-		if p2pCoordinator.badPeers.Has(conn.RemoteAddr().String()) {
+		if host, err := remoteHost(conn.RemoteAddr()); err == nil && p2pCoordinator.badHosts.Has(host) {
 			log.Println("Ignoring bad peer", conn.RemoteAddr().String())
+			conn.Close()
 			continue
 		}
-		p2pc, err := p2pSetupPeer(conn.RemoteAddr().String(), conn)
+		p2pc, err := p2pSetupPeer(conn.RemoteAddr().String(), conn, false)
 		if err != nil {
 			log.Println("Error setting up peer", conn.RemoteAddr().String(), err)
+			conn.Close()
 			continue
 		}
 		go p2pc.handleConnection()
@@ -407,7 +412,7 @@ func (p2pc *p2pConnection) handleConnection() {
 	// Only store the IP address as the address.
 	// This must be done in the goroutine because resolving can block for a long time.
 	addr, err := net.ResolveTCPAddr("tcp", p2pc.address)
-	if err == nil {
+	if err == nil && addr.String() != p2pc.address {
 		p2pc.address = addr.String()
 	}
 
@@ -446,15 +451,19 @@ func (p2pc *p2pConnection) handleConnection() {
 
 	go func() {
 		for {
-			line, err := p2pc.peer.ReadBytes('\n')
+			line, err := readLine(p2pc.peer.Reader, p2pMaxMessageSize)
 			if err != nil {
 				log.Println("Error reading data from", p2pc.address, err)
+				if errors.Is(err, errLineTooLong) {
+					p2pCoordinator.banPeer(p2pc)
+				}
 				toLoop(util.StrIfMap{"_error": "Error reading data"})
 				break
 			}
 			var msg util.StrIfMap
 			if err = json.Unmarshal(line, &msg); err != nil {
-				log.Println("Cannot parse JSON", strconv.QuoteToASCII(string(line)), "from", p2pc.address)
+				log.Println("Cannot parse JSON", strconv.QuoteToASCII(string(line[:min(len(line), 200)])), "from", p2pc.address)
+				p2pCoordinator.banPeer(p2pc)
 				toLoop(util.StrIfMap{"_error": "Cannot parse JSON"})
 				break
 			}
@@ -549,7 +558,11 @@ func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
 		dup = true
 	}
 	if dup {
-		p2pCoordinator.badPeers.Add(p2pc.address)
+		if p2pc.outbound {
+			// Remember the address we dialed so that we don't keep dialing it. For inbound connections
+			// the address has a random source port which says nothing about the peer.
+			p2pCoordinator.badPeers.Add(p2pc.address)
+		}
 		err = p2pc.conn.Close()
 		if err != nil {
 			log.Printf("p2pc.conn.Close: %v", err)
@@ -646,7 +659,7 @@ func (p2pc *p2pConnection) handleGetBlock(msg util.StrIfMap) {
 
 	var msgBlockEncoding, msgBlockData string
 
-	if cfg.p2pBlockInline {
+	if cfg.p2pBlockInline && fileSize <= p2pMaxInlineBlockSize {
 		f, err := os.Open(fileName)
 		if err != nil {
 			log.Println(err)
@@ -677,7 +690,12 @@ func (p2pc *p2pConnection) handleGetBlock(msg util.StrIfMap) {
 		msgBlockData = base64.StdEncoding.EncodeToString(zbuf.Bytes())
 	} else {
 		msgBlockEncoding = "http"
-		msgBlockData = fmt.Sprintf("http://%s:%d/block/%d", util.LocalAddresses()[0], cfg.httpPort, dbb.Height)
+		// The receiver only uses the port and the block number from this URL, and connects to our address as it knows it.
+		host := "localhost"
+		if addresses := util.LocalAddresses(); len(addresses) > 0 {
+			host = addresses[0]
+		}
+		msgBlockData = fmt.Sprintf("http://%s/block/%d", net.JoinHostPort(host, strconv.Itoa(cfg.httpPort)), dbb.Height)
 		log.Println("*** Instructing the peer to get a block from", msgBlockData)
 	}
 
@@ -719,92 +737,54 @@ func (p2pc *p2pConnection) handleBlock(msg util.StrIfMap) {
 	fileSize, err := msg.GetInt64("size")
 	if err != nil {
 		log.Println(err)
+		return
 	}
-	var blockFile *os.File
+	if err = checkBlockSize(fileSize); err != nil {
+		log.Println("Rejecting block", hash, "from", p2pc.address+":", err)
+		return
+	}
 	encoding, err := msg.GetString("encoding")
 	if err != nil {
 		log.Printf("encoding: %v", err)
 		return
 	}
-	if encoding == "zlib-base64" {
-		zlibData, err := base64.StdEncoding.DecodeString(dataString)
-		if err != nil {
-			log.Println(err)
+	if encoding != "zlib-base64" && encoding != "http" {
+		log.Println("Unknown block encoding:", encoding)
+		return
+	}
+	var blockURL string
+	if encoding == "http" {
+		if blockURL, err = blockHTTPURL(dataString, p2pc.conn.RemoteAddr()); err != nil {
+			log.Println("Rejecting block", hash, "from", p2pc.address+":", err)
 			return
 		}
-		blockFile, err = os.CreateTemp("", "daisy")
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		defer func() {
-			err = blockFile.Close()
-			if err != nil {
-				log.Printf("handleBlock blockFile.Close: %v", err)
-			}
-			err = os.Remove(blockFile.Name())
-			if err != nil {
-				log.Printf("remove: %v", err)
-			}
-		}()
-		r, err := zlib.NewReader(bytes.NewReader(zlibData))
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		defer func() {
-			err = r.Close()
-			if err != nil {
-				log.Printf("handleBlock r.Close: %v", err)
-			}
-		}()
-		written, err := io.Copy(blockFile, r)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		if written != fileSize {
-			log.Println("Error decoding block: sizes don't match:", written, "vs", fileSize)
-			return
-		}
-	} else if encoding == "http" {
-		log.Println("Getting block", hash, "from", dataString)
-		resp, err := p2pHTTPClient.Get(dataString)
-		if err != nil {
-			log.Println("Error receiving block at", dataString, err)
-			return
-		}
-		defer resp.Body.Close()
-		blockFile, err = os.CreateTemp("", "daisy")
-		if err != nil {
-			log.Println("Error creating temp file", err)
-			return
-		}
-		written, err := io.Copy(blockFile, resp.Body)
-		if err != nil {
-			log.Println("Error saving block:", err)
-			blockFile.Close()
-			os.Remove(blockFile.Name())
-			return
-		}
-		if written != fileSize {
-			log.Println("Error decoding block: sizes don't match:", written, "vs", fileSize)
-			blockFile.Close()
-			os.Remove(blockFile.Name())
-			return
-		}
-		err = blockFile.Close()
-		if err != nil {
+	}
+
+	blockFile, err := os.CreateTemp("", "daisy")
+	if err != nil {
+		log.Println("Error creating temp file", err)
+		return
+	}
+	defer func() {
+		if err := blockFile.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
 			log.Printf("handleBlock blockFile.Close: %v", err)
 		}
-		defer func() {
-			err = os.Remove(blockFile.Name())
-			if err != nil {
-				log.Printf("remove: %v", err)
-			}
-		}()
+		if err := os.Remove(blockFile.Name()); err != nil {
+			log.Printf("remove: %v", err)
+		}
+	}()
+	if encoding == "http" {
+		log.Println("Getting block", hash, "from", blockURL)
+		err = downloadHTTPBlock(blockFile, blockURL, fileSize)
 	} else {
-		log.Println("Unknown block encoding:", encoding)
+		err = downloadInlineBlock(blockFile, dataString, fileSize)
+	}
+	if err != nil {
+		log.Println("Error receiving block", hash, "from", p2pc.address+":", err)
+		return
+	}
+	if err = blockFile.Close(); err != nil {
+		log.Printf("handleBlock blockFile.Close: %v", err)
 		return
 	}
 
@@ -813,6 +793,7 @@ func (p2pc *p2pConnection) handleBlock(msg util.StrIfMap) {
 		log.Println("Error opening block file", p2pc.conn, err)
 		return
 	}
+	defer blk.Close()
 	blk.HashSignature, err = hex.DecodeString(hashSignature)
 	if err != nil {
 		log.Println("Error decoding hash signature", p2pc.conn, err)
@@ -836,7 +817,6 @@ func (p2pc *p2pConnection) handleBlock(msg util.StrIfMap) {
 		return
 	}
 	log.Println("Accepted block", blk.Hash, "at height", blk.Height)
-	blk.Close()
 }
 
 // Connect to a peer. Does everything except starting the handler goroutine.
@@ -850,6 +830,9 @@ func p2pConnectPeer(address string) (*p2pConnection, error) {
 	if p2pPeers.HasAddress(addr.String()) {
 		return nil, fmt.Errorf("Connection to %s already exists", addr.String())
 	}
+	if p2pCoordinator.isBanned(addr) {
+		return nil, fmt.Errorf("%s is a bad peer", addr.String())
+	}
 
 	localAddresses := util.LocalAddresses()
 	if slices.Contains(localAddresses, addr.IP.String()) {
@@ -861,15 +844,16 @@ func p2pConnectPeer(address string) (*p2pConnection, error) {
 		log.Println("Error connecting to", address, err)
 		return nil, err
 	}
-	return p2pSetupPeer(address, conn)
+	return p2pSetupPeer(addr.String(), conn, true)
 }
 
 // Creates the p2pConnection structure for the peer and adds it to the peer list.
 // Does not start the handler goroutine.
-func p2pSetupPeer(address string, conn net.Conn) (*p2pConnection, error) {
+func p2pSetupPeer(address string, conn net.Conn, outbound bool) (*p2pConnection, error) {
 	p2pc := p2pConnection{
 		conn:         conn,
 		address:      address,
+		outbound:     outbound,
 		chanFromPeer: make(chan util.StrIfMap, 5),
 		outboxReady:  make(chan struct{}, 1),
 	}
