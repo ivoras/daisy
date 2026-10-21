@@ -38,6 +38,7 @@ Order of work: 1) P2P resource limits (#5–#8, #12, #13), 2) peer management an
 
 - [x] **#3 Key ops can freeze for good (medium).**
   *Done:* the quorum is `min(QuorumForHeight(h), floor(active/2)+1)` (`EffectiveQuorum`); README and tests updated.
+  (Superseded by #14: the quorum is now always a majority.)
   `QuorumForHeight` jumps to 10 at height 149 and keeps growing. A chain with fewer active signatories than that can
   never add or revoke a key again. Cap the quorum by the number of active signatories (e.g. ⌊active/2⌋+1) and update
   the README table and its test.

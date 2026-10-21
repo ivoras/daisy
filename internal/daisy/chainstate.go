@@ -211,11 +211,6 @@ func acceptBlockLocked(fileName string, hashSignature []byte) (info acceptInfo, 
 	if err != nil {
 		return info, err
 	}
-	// The block is a candidate now: make sure that its file is not corrupt (the blocks which are already known, and
-	// the orphans, which are checked when their predecessor arrives, don't need that)
-	if err = blk.QuickCheck(); err != nil {
-		return info, err
-	}
 	height := prev.Height + 1
 	info.height = height
 	tip, err := dbGetTipBlock()
@@ -248,6 +243,12 @@ func acceptBlockLocked(fileName string, hashSignature []byte) (info acceptInfo, 
 		recentSigners: recent,
 	})
 	if err != nil {
+		return info, err
+	}
+	// The block is valid and signed by a signatory: only now make sure that its file is not corrupt, because the check
+	// reads the whole file (the blocks which are already known, and the orphans, which are checked when their
+	// predecessor arrives, don't need that)
+	if err = blk.QuickCheck(); err != nil {
 		return info, err
 	}
 
