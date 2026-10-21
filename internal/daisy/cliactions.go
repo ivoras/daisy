@@ -65,10 +65,13 @@ func processPreBlockchainActions() bool {
 		actionNewChain(flag.Arg(1))
 		return true
 	case "pull":
-		if flag.NArg() < 2 {
+		pullFlags := flag.NewFlagSet("pull", flag.ExitOnError)
+		expectGenesis := pullFlags.String("expect-genesis", cfg.expectGenesis, "The hash of the genesis block which the chain is expected to have")
+		pullFlags.Parse(flag.Args()[1:])
+		if pullFlags.NArg() < 1 {
 			log.Fatalln("Not enough arguments: expecting chain URL")
 		}
-		actionPull(flag.Arg(1))
+		actionPull(pullFlags.Arg(0), *expectGenesis)
 		return true
 	}
 	return false
@@ -111,7 +114,14 @@ func actionSignImportBlock(fn string) {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	err = dbSetMetaString(db, "Timestamp", time.Now().Format(time.RFC3339))
+	// The block must be later than the one before it, by at least the block period
+	timestamp := time.Now()
+	if parentTime, err := readBlockTimestamp(blockchainGetFilename(dbb.Height)); err != nil {
+		log.Fatalln(err)
+	} else if earliest := parentTime.Add(chainParams.blockPeriod()); timestamp.Before(earliest) {
+		timestamp = earliest
+	}
+	err = dbSetMetaString(db, "Timestamp", timestamp.Format(time.RFC3339))
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -224,7 +234,7 @@ func actionHelp() {
 	fmt.Println("\tquery\t\tExecutes a SQL query on the blockchain (expects 1 argument: SQL query)")
 	fmt.Println("\tsignimportblock\tSigns a block (creates metadata tables in it first) and imports it into the blockchain (expects 1 argument: a sqlite db filename)")
 	fmt.Println("\tnewchain\tStarts a new chain with the given parameters (expects 1 argument: chainparams.json)")
-	fmt.Println("\tpull\t\tPulls a blockchain from a HTTP URL (expects 1 argument: URL, e.g. http://example.com:2018/)")
+	fmt.Println("\tpull\t\tPulls a blockchain from a HTTP URL (expects 1 argument: URL, e.g. http://example.com:2018/; use -expect-genesis <hash> to check the chain)")
 }
 
 // Shows the public keys which correspond to private keys in the system database.
@@ -250,6 +260,12 @@ func actionNewChain(jsonFilename string) {
 	err = json.Unmarshal(jsonData, &ncp)
 	if err != nil {
 		log.Fatalln(err)
+	}
+	if ncp.BlockPeriodSeconds < 0 {
+		log.Fatalln("block_period_seconds must not be negative")
+	}
+	if ncp.BlockPeriodSeconds == 0 {
+		ncp.BlockPeriodSeconds = defaultBlockPeriodSeconds
 	}
 	if ncp.GenesisBlockTimestamp == "" {
 		ncp.GenesisBlockTimestamp = time.Now().Format(time.RFC3339)
@@ -362,6 +378,7 @@ func actionNewChain(jsonFilename string) {
 	if err != nil {
 		log.Fatalln("Error getting public key from db", err)
 	}
+	// The genesis key ops are in the old format (there's only the hash of the key to sign), see consensus.go
 	selfSig, err := dcrypto.SignPublicKeyHash(pKey, pubKeyHash)
 	if err != nil {
 		log.Fatalln("Error signing publicKey", err)
@@ -476,7 +493,17 @@ func httpGetLimited(url string, maxSize int64) ([]byte, error) {
 	return body, nil
 }
 
-func actionPull(baseURL string) {
+// checkExpectedGenesis returns an error if the genesis block hash which the server has is not the expected one
+func checkExpectedGenesis(expected, actual string) error {
+	if !strings.EqualFold(strings.TrimSpace(expected), actual) {
+		return fmt.Errorf("the genesis block hash is %s, but %s was expected", actual, expected)
+	}
+	return nil
+}
+
+// actionPull creates a new data directory out of the genesis block of a chain which is served by another node.
+// The server is not authenticated: the only thing that makes sure it's the right chain is the expected genesis hash.
+func actionPull(baseURL, expectGenesis string) {
 	if !strings.HasSuffix(baseURL, "/") {
 		baseURL = baseURL + "/"
 	}
@@ -493,6 +520,23 @@ func actionPull(baseURL string) {
 	}
 	if chainParams.GenesisBlockHash == "" || chainParams.GenesisBlockHashSignature == "" {
 		log.Fatalln("Incomplete chainparams data", cpURL)
+	}
+
+	if expectGenesis != "" {
+		if err := checkExpectedGenesis(expectGenesis, chainParams.GenesisBlockHash); err != nil {
+			log.Fatalf("The chain at %s: %v. Nothing has been pulled.", baseURL, err)
+		}
+		log.Println("The genesis block hash is the expected one:", chainParams.GenesisBlockHash)
+	} else {
+		log.Println("====================================================================")
+		log.Println("WARNING: the source of this chain is not authenticated (plain HTTP, and")
+		log.Println("the chain parameters come from the server). Whoever controls the server,")
+		log.Println("or the network, can give you an entirely different chain.")
+		log.Println("  Genesis block hash:  ", chainParams.GenesisBlockHash)
+		log.Println("  Genesis creator key: ", chainParams.CreatorPublicKey)
+		log.Println("Check the genesis hash against a trusted source, and use")
+		log.Println("-expect-genesis <hash> to have it enforced.")
+		log.Println("====================================================================")
 	}
 
 	// Step 2: Fetch the genesis block

@@ -28,11 +28,9 @@ func drainCtrl() []p2pCtrlMessage {
 }
 
 func helloMsg(id int, height int, tipHash string, score int) util.StrIfMap {
-	m := util.StrIfMap{"version": "test", "chain_height": float64(height), "p2p_id": float64(id), "my_peers": []any{}}
-	if tipHash != "" {
-		m["tip_hash"] = tipHash
-		m["chain_score"] = float64(score)
-	}
+	m := util.StrIfMap{"version": "test", "chain_height": float64(height), "p2p_id": float64(id), "my_peers": []any{},
+		"protocol": float64(p2pProtocolVersion), "min_protocol": float64(p2pMinProtocolVersion),
+		"tip_hash": tipHash, "chain_score": float64(score)}
 	return m
 }
 
@@ -64,9 +62,7 @@ func TestHelloTriggersSearchForBetterChains(t *testing.T) {
 		score   int
 		search  bool
 	}{
-		{"higher, from an old version", 5, "", 0, true},
-		{"the same height, from an old version", 2, "", 0, false},
-		{"lower, from an old version", 1, "", 0, false},
+		{"higher, but with a lower score (the height doesn't count)", 5, other, tip.TotalScore - 1, false},
 		{"the same tip", 2, tip.Hash, tip.TotalScore, false},
 		{"a different tip with a higher score at the same height", 2, other, tip.TotalScore + 1, true},
 		{"a different tip with a higher score, but lower", 1, other, tip.TotalScore + 1, true},
@@ -104,9 +100,9 @@ func TestBlockHashesRequestsTheBlocksOfOtherBranches(t *testing.T) {
 	best2 := tc.newBlock(best.hash, tc.inTurn(best.hash), "best2")
 	tc.mustAccept(best2, blockNewTip)
 
-	unknown1 := fmt.Sprintf("unknown-%d-1", time.Now().UnixNano())
-	unknown2 := fmt.Sprintf("unknown-%d-2", time.Now().UnixNano())
-	veryOld := fmt.Sprintf("old-%d", time.Now().UnixNano())
+	unknown1 := testHash(fmt.Sprintf("unknown-%d-1", time.Now().UnixNano()))
+	unknown2 := testHash(fmt.Sprintf("unknown-%d-2", time.Now().UnixNano()))
+	veryOld := testHash(fmt.Sprintf("old-%d", time.Now().UnixNano()))
 
 	p2pc, _ := newPipeConnection(t, "203.0.113.50:2017")
 	p2pc.handleBlockHashes(util.StrIfMap{"hashes": map[string]any{
@@ -139,10 +135,16 @@ func TestSideBlocksAreServed(t *testing.T) {
 	conn, _ := newPipeConnection(t, "203.0.113.60:2017")
 	conn.handleGetBlock(util.StrIfMap{"hash": side.hash})
 	if len(conn.outbox) != 1 {
-		t.Fatalf("expected a block message, got %d messages", len(conn.outbox))
+		t.Fatalf("expected a block sender, got %d messages", len(conn.outbox))
 	}
-	msg := conn.outbox[0].(p2pMsgBlockStruct)
-	if msg.Hash != side.hash || msg.Encoding != "http" || !strings.HasSuffix(msg.Data, "/block/"+side.hash) {
+	sender := conn.outbox[0].(*blockSender)
+	defer sender.close()
+	first, _, err := sender.nextMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := first.(p2pMsgBlockStruct)
+	if msg.Hash != side.hash || msg.Encoding != p2pEncodingChunked {
 		t.Errorf("unexpected block message %+v", msg)
 	}
 	if st, err := os.Stat(side.file); err != nil || msg.Size != st.Size() {

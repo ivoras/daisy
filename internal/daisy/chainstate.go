@@ -96,8 +96,54 @@ func readKeyOps(fileName string) (map[string][]BlockKeyOp, error) {
 		return nil, err
 	}
 	defer db.Close()
+	if err = dbCheckBlockTables(db); err != nil {
+		return nil, err
+	}
 	b := Block{db: db}
 	return b.dbGetKeyOps()
+}
+
+// Reads the Timestamp of a block file. It is zero if there's no valid one.
+func readBlockTimestamp(fileName string) (time.Time, error) {
+	db, err := dbOpen(fileName, true)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer db.Close()
+	if err = dbCheckBlockTables(db); err != nil {
+		return time.Time{}, err
+	}
+	b := Block{db: db}
+	t, err := b.dbGetMetaTime("Timestamp")
+	if err != nil {
+		return time.Time{}, nil
+	}
+	return t, nil
+}
+
+// blockFileOf returns the name of the file which has the given block of the block tree
+func blockFileOf(block *DbBlockchainBlock, onBestChain bool) string {
+	if onBestChain {
+		return blockchainGetFilename(block.Height)
+	}
+	return sideBlockFilename(block.Hash)
+}
+
+// recentSignersOf returns the signers of the last n blocks (not counting the genesis block) of the branch which ends
+// with the given block, the signer of that block being the last one.
+func recentSignersOf(block *DbBlockchainBlock, n int) ([]string, error) {
+	var result []string
+	cur := block
+	for len(result) < n && cur.Height > genesisBlockHeight {
+		result = append(result, cur.SignaturePublicKeyHash)
+		prev, _, err := dbGetAnyBlock(cur.PreviousBlockHash)
+		if err != nil {
+			return nil, fmt.Errorf("The branch is broken: %w", err)
+		}
+		cur = prev
+	}
+	slices.Reverse(result)
+	return result, nil
 }
 
 // acceptBlock validates the block in the given file and adds it to the block tree. It makes the branch of the block the
@@ -181,8 +227,28 @@ func acceptBlockLocked(fileName string, hashSignature []byte) (info acceptInfo, 
 		return info, fmt.Errorf("The block would fork the blockchain %d blocks below the tip, and the limit is %d",
 			tip.Height-forkHeight, maxReorgDepth)
 	}
-	ops, err := validateBlock(blk, height, keys)
+	parentTime, err := readBlockTimestamp(blockFileOf(prev, prevOnBestChain))
 	if err != nil {
+		return info, err
+	}
+	recent, err := recentSignersOf(prev, recentSignerWindow(keys))
+	if err != nil {
+		return info, err
+	}
+	ops, err := validateBlock(blk, height, keys, blockContext{
+		genesisHash:   chainParams.GenesisBlockHash,
+		parentTime:    parentTime,
+		now:           time.Now(),
+		blockPeriod:   chainParams.blockPeriod(),
+		recentSigners: recent,
+	})
+	if err != nil {
+		return info, err
+	}
+	// The block is valid and signed by a signatory: only now make sure that its file is not corrupt, because the check
+	// reads the whole file (the blocks which are already known, and the orphans, which are checked when their
+	// predecessor arrives, don't need that)
+	if err = blk.QuickCheck(); err != nil {
 		return info, err
 	}
 

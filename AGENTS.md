@@ -28,7 +28,7 @@ d=$(mktemp -d)
 ./daisy -dir $d/n1 signimportblock some.db             # add a block
 ./daisy -dir $d/n1 query "SELECT * FROM sometable"
 ./daisy -dir $d/n1 -port 12017 -http-port 12018 &       # serve it
-./daisy -dir $d/n2 pull http://localhost:12018          # replicate the genesis block
+./daisy -dir $d/n2 pull -expect-genesis <genesis hash> http://localhost:12018   # replicate the genesis block
 ```
 
 ## Layout
@@ -61,8 +61,13 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
 - `docs/PROTOCOL.md` is the reference. Change it with the code. `p2pProtocolVersion` / `p2pMinProtocolVersion` (in
   `p2pprotocol.go`) are bumped only when a peer must know that it may use something new, or must be kept away;
   adding an optional field or message needs no bump (unknown ones are ignored). Gate new behaviour on `p2pc.protocol`.
-- Blocks to protocol 2 peers go through `blockSender` (a `lazyMessage` in the outbox: one chunk per flush pass so the
-  connection keeps reading). Received chunks are checked for order and total size, bounded per connection and globally.
+- Blocks go through `blockSender` (a `lazyMessage` in the outbox: one chunk per flush pass so the connection keeps
+  reading; the file is opened on the first `nextMessage`). A peer's `getblock` requests go through `requestBlockToSend`:
+  2 senders at a time, the rest wait as hashes (bounded), duplicates are dropped. Received chunks are checked for order and
+  total size, bounded per connection, per host and globally (`p2pIncoming`), and the finished file is hashed before `acceptBlock`.
+- Protocol 3 is the only one spoken (`p2pMinProtocolVersion`); versions 1 and 2 are gone (don't reuse their numbers). The
+  hello must have `protocol`, `min_protocol`, `chain_height`, `tip_hash` and `chain_score`.
+  `getblockhashes`/`blockhashes` are limited to `p2pMaxBlockHashes` and walked page by page (`p2psync.go`, `syncState`).
 - `addrbook.go` is the only place that writes the `peers` table (`abAdd`, `abGood`, `abFailed`, `abSelect`...). Peers
   are made known by gossip, seeds, lists and mDNS through `p2pCtrlConnectPeers` -> `handleConnectPeers`, which only puts them
   in the book; `maintainConnections` (every tick, and after new addresses) decides whom to connect to. An address
@@ -70,13 +75,28 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
 - `nat.go` (UPnP/NAT-PMP, `-upnp`) and `mdns.go` (`-mdns`) are opt-in and start from `run.go`; `nat.go` talks to the
   router through the `portMapper` interface so it's tested with a fake. `DAISY_TEST_MDNS=1` enables a test that needs
   a network with multicast.
-- `selfInfo` is what peers tell us about ourselves (the address they see, whether they could connect). It needs a
-  quorum of different peers before it's believed, and it's only informational or used to avoid connecting to ourselves.
+- `selfInfo` is what peers tell us about ourselves (the address they see, whether they could connect) and is purely
+  informational (`/status`). `observed_host` is taken only from the hello of connections we dialed, one vote per peer host
+  (a new vote replaces the old), votes expire after an hour, and the maps are bounded; `reachable` counts distinct hosts and
+  expires the same way. Peers' votes never decide whom we dial: `isSelf()` is true only for the NAT `external` address and
+  for `selfHosts`, addresses where a connection we dialed came back to us (also expiring, and an attacker can only add its own).
 
 ## Block tree and fork choice
 
 - `consensus.go`: scoring (in turn 2, out of turn 1), `isBetterTip`, and `validateBlock`/`validateKeyOps`, which are pure
-  functions of the block and a `keySet` (`keyset.go`). Validation never writes anything.
+  functions of the block, a `keySet` (`keyset.go`) and a `blockContext` (genesis hash, the parent's timestamp, "now", the
+  block period, the signers of the previous blocks of the branch). Validation never writes anything. The comment at the top
+  of the file describes all the rules and why they are there; read it before changing any of them.
+- Rules above height 0 (the genesis block is pinned by its hash, so the rules it can't satisfy exempt it): a `Timestamp` in
+  `_meta` at least `block_period_seconds` after the parent's and at most `maxFutureDrift` ahead of the local clock (replaying
+  the chain in `blockchainVerifyEverything` passes no "now", so that check is skipped); a signer may not have signed any of
+  the previous `floor(N/2)` blocks of the branch (`recentSignersOf`, `recentSignerWindow`); low-S signatures; key ops signed
+  over `dcrypto.KeyOpMessage` (op, genesis hash, key hash); key ops need a majority of the active signatories before the
+  block, `KeyOpQuorum` = `floor(N/2)+1`, at every height (so a minority can't add keys it controls). The genesis block's key ops use the old `SignPublicKeyHash` format, also in `newchain`.
+- Tests: with `testChain`, the timestamps of the blocks advance a second per block from a genesis a day in the past
+  (`newBlockAt` sets one explicitly); `tc.next(prev)` picks a signer who is allowed to sign (in turn if possible), because
+  `tc.inTurn` may return a signer that signed too recently. A scenario with two signatories can't have one of them sign
+  twice in a row: use three.
 - `chainstate.go`: `acceptBlock` is the only way a block enters the chain (P2P and `signimportblock` both use it).
   It serializes on `chainLock`, stores blocks of other branches in `sideblocks`, and `reorganize`s when a branch wins.
   Blocks whose predecessor is unknown wait in `orphanPool` and the missing block is requested from the peer.
@@ -92,8 +112,10 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
 - **Consensus compatibility.** Block hashes are SHA-256 of the raw SQLite file, and signatures are
   ASN.1-DER ECDSA P-256 over the raw 32-byte hash. The hard-coded genesis block hash/signature in
   `internal/daisy/blockchain.go` must keep verifying against `internal/assets/genesis.db`
-  (`TestEmbeddedGenesisBlock`). `QuorumForHeight` is consensus-critical; it is pinned by a test against
-  the README table. Changing any of these forks the chain.
+  (`TestEmbeddedGenesisBlock`, `TestGenesisBlockKeepsTheOldFormat`): that block has key ops in the old format, a high-S
+  signature and no Timestamp, so every new rule must exempt height 0. `KeyOpQuorum` (a majority, pinned by
+  `TestKeyOpQuorum` and `TestKeyOpsNeedAMajorityAtEveryHeight`) and the key op message
+  (`dcrypto.KeyOpMessage`) are consensus-critical, too. Changing any of these forks the chain.
 - **Never modify `internal/assets/genesis.db`** (or anything that changes its bytes, including opening it
   read-write with SQLite): its hash is the chain's identity.
 - **Block files on disk** are `blocks/<height/65536 as %04x>/block_<height as %08x>.db`. Any code that
@@ -109,18 +131,34 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
   a channel that the same goroutine is the only reader of.
 - Never block while holding `p2pPeers.lock`: use `p2pPeers.Snapshot()` and work on the copy.
 - Never block on the coordinator: use `p2pCtrlSend()` (drops the hint if the coordinator is busy).
-- Every network operation needs a timeout: `p2pDialer`, `p2pHTTPClient`, and the write deadline in `sendMsg`.
+- Every network operation needs a timeout: `p2pDialer` and the write deadline in `sendMsg`. A connection must say hello
+  within `p2pHelloTimeout`, and then be heard from within `p2pIdleTimeout` (every message resets it; nodes `ping` each other
+  every `p2pPingInterval`). At most `p2pMaxInboundPerHost` inbound connections per IP.
 
 ## Untrusted input from peers
 
 - Limits live in `internal/daisy/p2pnet.go`: messages 64 MiB (`p2pMaxMessageSize`), blocks 1 GiB
-  (`p2pMaxBlockSize`), inline (`zlib-base64`) blocks only up to 32 MiB. Read peer data through `readLine`,
-  `copyExactly` and the `download*Block` helpers, never with unbounded `ReadBytes`/`io.Copy`/`io.ReadAll`.
-- The `http` block encoding: the URL from the peer is only a hint. `blockHTTPURL` keeps its port and block
-  number, but always connects to the peer's own address; redirects are not followed.
-- Bans: `badPeers` holds dialed `ip:port` addresses (set for outbound duplicate/self connections),
-  `badHosts` holds IPs which violated the protocol (oversized or malformed messages). Inbound connections have
+  (`p2pMaxBlockSize`). Read peer data through `readLine` and the chunk handlers, never with unbounded
+  `ReadBytes`/`io.Copy`/`io.ReadAll`.
+- A `block` message is only acted on (budget reserved, temp file created) if we asked that peer for the block (`noteRequested`)
+  or its `hash_signature` verifies against a key in the `pubkeys` table, whatever the key's state (`signedByKnownSignatory`).
+  `blockhashes` heights must be in the range we asked for or near our tip, and at most `p2pMaxBlockHashes` are handled.
+  A second `hello` on a connection is ignored.
+- Block files are arbitrary SQLite databases from the network. Open them only through `dbOpen(file, true)` (the
+  `sqlite3_block` driver in `blockdb.go`: `mode=ro`, `query_only`, `trusted_schema=OFF`, lowered limits, escaped DSN),
+  never with `sql.Open("sqlite3", ...)`. `OpenBlockFile`, `readKeyOps` and `readBlockTimestamp` check that `_meta` and
+  `_keys` are real tables (`dbCheckBlockTables`); `acceptBlockLocked` also runs `Block.QuickCheck` (`PRAGMA quick_check`),
+  only after the block's signatures are valid; reads of `_meta`/`_keys` have a time limit and `_keys` is capped at
+  `maxBlockKeyOps`. Don't read user tables or run user SQL on a block while holding `chainLock` (`daisy query` is the only
+  place that runs SQL over blocks, and it doesn't hold it). go-sqlite3 doesn't expose `SQLITE_DBCONFIG_DEFENSIVE`; it only
+  matters for writable connections.
+- Bans: `badPeers` holds dialed `ip:port` addresses (set for outbound self connections and for peers whose protocol version
+  is incompatible), `badHosts` holds IPs which violated the protocol (oversized or malformed messages). Inbound connections have
   random source ports, so never key a ban on an inbound connection's `ip:port`.
+- `p2p_id` is only sent in `hello`, and anybody can claim any ID. It is used for exactly two things: a hello with our own ID
+  is a connection to ourselves (it is dropped and, if we dialed it, only that address is avoided), and a connection from the
+  same IP address as an already handshaken one with the same ID is dropped as a second connection of the node
+  (`p2pPeersSet.handshake`). Nothing is ever banned because of a claimed ID, and a claimed ID never affects another IP's connection.
 
 ## Known problems (not yet fixed)
 
@@ -129,7 +167,11 @@ These were found in a review and are tracked here so they aren't mistaken for in
 - P2P has no encryption or authentication. Peers can still lie about who is alive; the address book limits how much of
   it one network or one source can fill, and addresses are remembered as tried only after a valid hello.
 - The p2p protocol is versioned, but the *consensus rules* are not: a change in which blocks are valid would fork the chain
-  and needs an activation height in `chainparams.json` that doesn't exist yet.
+  and needs an activation height in `chainparams.json` that doesn't exist yet. (The rules about timestamps, signing
+  frequency and key op signatures were added before any chain was deployed, so they apply from height 1.)
+- `chainparams.json` (including `block_period_seconds`) is not covered by the genesis block hash, and `daisy pull` takes it
+  from an unauthenticated server; `-expect-genesis` only pins the genesis hash.
+- With few signatories the recently-signed rule needs most of them online: with two, both (see `consensus.go`).
 - Fork choice is by score only; there is no finality, and a branch deeper than `maxReorgDepth` is never accepted,
   so a node that was offline for longer than that during a fork must be re-created (`daisy pull`).
 - `mining.CountStartZeroBits` counts zero bits across all bytes rather than only leading ones (the PoW

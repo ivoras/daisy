@@ -219,12 +219,13 @@ func dbInit() {
 	}
 }
 
-// Just opens the given file as a SQLite database
+// Just opens the given file as a SQLite database. Read-only is how block files are opened, and they may come
+// from anywhere, so that is the hardened way of opening them (see blockdb.go).
 func dbOpen(fileName string, readOnly bool) (*sql.DB, error) {
 	if !readOnly {
 		return sql.Open("sqlite3", fileName)
 	}
-	return sql.Open("sqlite3", "file:"+fileName+"?mode=ro")
+	return sql.Open(blockDriverName, blockDSN(fileName))
 }
 
 // Counts the number of private keys in the system databases

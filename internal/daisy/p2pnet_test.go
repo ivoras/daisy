@@ -2,17 +2,11 @@ package daisy
 
 import (
 	"bufio"
-	"bytes"
-	"compress/zlib"
-	"encoding/base64"
+	"encoding/json"
 	"errors"
-	"fmt"
+	"io"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -44,44 +38,6 @@ func TestReadLine(t *testing.T) {
 	}
 }
 
-func TestBlockHTTPURL(t *testing.T) {
-	remote4 := &net.TCPAddr{IP: net.ParseIP("203.0.113.7"), Port: 54321}
-	remote6 := &net.TCPAddr{IP: net.ParseIP("2001:db8::1"), Port: 54321}
-	for _, tc := range []struct {
-		name, in string
-		remote   net.Addr
-		want     string // empty: must be refused
-	}{
-		{"normal", "http://10.1.2.3:2018/block/5", remote4, "http://203.0.113.7:2018/block/5"},
-		{"the host is always the peer's", "http://169.254.169.254:2018/block/5", remote4, "http://203.0.113.7:2018/block/5"},
-		{"hostname is replaced too", "http://localhost:2018/block/0", remote4, "http://203.0.113.7:2018/block/0"},
-		{"no port", "http://example.com/block/7", remote4, "http://203.0.113.7:80/block/7"},
-		{"ipv6 peer", "http://[::1]:2018/block/9", remote6, "http://[2001:db8::1]:2018/block/9"},
-		{"https", "https://example.com:2018/block/5", remote4, ""},
-		{"file", "file:///etc/passwd", remote4, ""},
-		{"userinfo", "http://u:p@example.com:2018/block/5", remote4, ""},
-		{"query", "http://example.com:2018/block/5?x=1", remote4, ""},
-		{"fragment", "http://example.com:2018/block/5#x", remote4, ""},
-		{"other path", "http://example.com:2018/admin", remote4, ""},
-		{"traversal", "http://example.com:2018/block/../admin", remote4, ""},
-		{"not a number", "http://example.com:2018/block/abc", remote4, ""},
-		{"negative", "http://example.com:2018/block/-1", remote4, ""},
-		{"port zero", "http://example.com:0/block/1", remote4, ""},
-		{"port too large", "http://example.com:70000/block/1", remote4, ""},
-		{"garbage", "::::", remote4, ""},
-		{"no remote address", "http://example.com:2018/block/1", nil, ""},
-	} {
-		got, err := blockHTTPURL(tc.in, tc.remote)
-		if tc.want == "" {
-			if err == nil {
-				t.Errorf("%s: %q should have been refused, got %q", tc.name, tc.in, got)
-			}
-		} else if err != nil || got != tc.want {
-			t.Errorf("%s: got %q, %v; want %q", tc.name, got, err, tc.want)
-		}
-	}
-}
-
 func TestCheckBlockSize(t *testing.T) {
 	for size, ok := range map[int64]bool{
 		-1: false, 0: false, 1: true, 1 << 20: true, p2pMaxBlockSize: true, p2pMaxBlockSize + 1: false,
@@ -89,170 +45,6 @@ func TestCheckBlockSize(t *testing.T) {
 		if err := checkBlockSize(size); (err == nil) != ok {
 			t.Errorf("checkBlockSize(%d) = %v", size, err)
 		}
-	}
-}
-
-func zlibBase64(t *testing.T, data []byte) string {
-	t.Helper()
-	var buf bytes.Buffer
-	w := zlib.NewWriter(&buf)
-	w.Write(data)
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return base64.StdEncoding.EncodeToString(buf.Bytes())
-}
-
-func TestDownloadInlineBlock(t *testing.T) {
-	data := bytes.Repeat([]byte("daisy"), 1000)
-	var out bytes.Buffer
-	if err := downloadInlineBlock(&out, zlibBase64(t, data), int64(len(data))); err != nil || !bytes.Equal(out.Bytes(), data) {
-		t.Fatalf("valid block rejected: %v", err)
-	}
-
-	// A decompression bomb: it must be stopped at the announced size, not inflated completely
-	bomb := zlibBase64(t, make([]byte, 8<<20))
-	out.Reset()
-	if err := downloadInlineBlock(&out, bomb, 1000); err == nil {
-		t.Fatal("block bigger than announced accepted")
-	}
-	if out.Len() > 1001 {
-		t.Errorf("wrote %d bytes of a block announced to be 1000", out.Len())
-	}
-	out.Reset()
-	if err := downloadInlineBlock(&out, zlibBase64(t, data), int64(len(data))+1); err == nil {
-		t.Error("block smaller than announced accepted")
-	}
-	if err := downloadInlineBlock(&out, zlibBase64(t, data), p2pMaxBlockSize+1); err == nil {
-		t.Error("announced size over the maximum accepted")
-	}
-	if err := downloadInlineBlock(&out, "!!! not base64", 10); err == nil {
-		t.Error("garbage accepted")
-	}
-}
-
-func TestDownloadHTTPBlock(t *testing.T) {
-	data := bytes.Repeat([]byte("daisy"), 1000)
-	var sent atomic.Int64
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/block/1":
-			w.Write(data)
-		case "/block/2": // Much more than announced, without Content-Length (chunked)
-			chunk := make([]byte, 64<<10)
-			for range 1000 {
-				n, err := w.Write(chunk)
-				sent.Add(int64(n))
-				if err != nil {
-					return
-				}
-				w.(http.Flusher).Flush()
-			}
-		case "/block/3":
-			http.Error(w, "nope", http.StatusNotFound)
-		}
-	}))
-	defer ts.Close()
-
-	var out bytes.Buffer
-	if err := downloadHTTPBlock(&out, ts.URL+"/block/1", int64(len(data))); err != nil || !bytes.Equal(out.Bytes(), data) {
-		t.Fatalf("valid block rejected: %v", err)
-	}
-	out.Reset()
-	if err := downloadHTTPBlock(&out, ts.URL+"/block/1", int64(len(data))-1); err == nil {
-		t.Error("block bigger than announced accepted (Content-Length)")
-	}
-	out.Reset()
-	if err := downloadHTTPBlock(&out, ts.URL+"/block/2", 1000); err == nil {
-		t.Error("block bigger than announced accepted (streamed)")
-	}
-	if out.Len() > 1001 {
-		t.Errorf("wrote %d bytes of a block announced to be 1000", out.Len())
-	}
-	if err := downloadHTTPBlock(&out, ts.URL+"/block/3", 1000); err == nil {
-		t.Error("a 404 response accepted")
-	}
-}
-
-// A peer must not be able to make us request URLs on other hosts, neither directly nor with a redirect.
-func TestHandleBlockDoesNotFetchFromOtherHosts(t *testing.T) {
-	setupTestSysDbs(t)
-	var victimHits, peerHits atomic.Int32
-	var peerRequestsLock sync.Mutex
-	var peerRequests []string
-
-	var victim *httptest.Server
-	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		peerHits.Add(1)
-		peerRequestsLock.Lock()
-		peerRequests = append(peerRequests, r.Host+r.URL.String())
-		peerRequestsLock.Unlock()
-		http.Redirect(w, r, victim.URL+"/block/1", http.StatusFound)
-	}))
-	defer peer.Close()
-	_, peerPort, _ := net.SplitHostPort(peer.Listener.Addr().String())
-
-	// The victim is a different host than the peer: 127.0.0.2 vs. 127.0.0.1. (It must not have the same port number
-	// as the peer, otherwise the address of the peer with the port of the victim is the peer.)
-	var victimListener net.Listener
-	for range 20 {
-		l, err := net.Listen("tcp", "127.0.0.2:0")
-		if err != nil {
-			t.Skip("cannot listen on 127.0.0.2:", err)
-		}
-		if _, port, _ := net.SplitHostPort(l.Addr().String()); port != peerPort {
-			victimListener = l
-			break
-		}
-		l.Close()
-	}
-	if victimListener == nil {
-		t.Skip("cannot get a port for the victim")
-	}
-	victim = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		victimHits.Add(1)
-	}))
-	victim.Listener.Close()
-	victim.Listener = victimListener
-	victim.Start()
-	defer victim.Close()
-
-	conn, err := net.Dial("tcp", peer.Listener.Addr().String()) // RemoteAddr() is the peer
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	p2pc := newTestConnection(conn, conn.RemoteAddr().String())
-
-	handle := func(url string, size int64) {
-		p2pc.handleBlock(util.StrIfMap{
-			"hash": fmt.Sprintf("hash-%s", url), "hash_signature": "00", "data": url,
-			"size": float64(size), "encoding": "http",
-		})
-	}
-
-	// 1. A URL for a different host: the host is replaced with the peer's, so the victim is not contacted
-	handle(victim.URL+"/block/1", 100)
-	if victimHits.Load() != 0 {
-		t.Fatal("fetched a URL from a host that isn't the peer")
-	}
-
-	// 2. The peer's own port, but it redirects to the victim
-	handle("http://example.invalid:"+peerPort+"/block/1", 100)
-	if peerHits.Load() != 1 {
-		peerRequestsLock.Lock()
-		defer peerRequestsLock.Unlock()
-		t.Fatalf("expected one request to the peer, got %d: %q", peerHits.Load(), peerRequests)
-	}
-	if victimHits.Load() != 0 {
-		t.Fatal("followed a redirect to another host")
-	}
-
-	// 3. Absurd sizes are refused before any request is made
-	handle("http://example.invalid:"+peerPort+"/block/1", p2pMaxBlockSize+1)
-	handle("http://example.invalid:"+peerPort+"/block/1", 0)
-	if peerHits.Load() != 1 {
-		t.Fatal("made a request for a block of an unacceptable size")
 	}
 }
 
@@ -280,25 +72,144 @@ func TestBannedPeers(t *testing.T) {
 	}
 }
 
-// Duplicate and self connections: only the outbound ones are remembered as bad dial addresses, because the
-// address of an inbound connection contains a random source port.
-func TestDuplicateConnectionBans(t *testing.T) {
-	setupTestSysDbs(t)
-	existing := newTestConnection(nil, "198.51.100.1:2017")
-	existing.peerID = 4242
-	p2pPeers.Add(existing)
-	defer p2pPeers.Remove(existing)
+// pipeConnection is a connection of the given kind with a fake remote address, registered with the peers
+func pipeConnection(t *testing.T, address string, outbound bool) *p2pConnection {
+	t.Helper()
+	local, remote := net.Pipe()
+	t.Cleanup(func() { local.Close(); remote.Close() })
+	p2pc := newTestConnection(&fakeAddrConn{Conn: local, remote: address}, address)
+	p2pc.outbound = outbound
+	p2pPeers.Add(p2pc)
+	t.Cleanup(func() { p2pPeers.Remove(p2pc) })
+	return p2pc
+}
 
-	for _, outbound := range []bool{true, false} {
-		local, remote := net.Pipe()
-		defer remote.Close()
-		address := fmt.Sprintf("198.51.100.2:%d", map[bool]int{true: 2017, false: 40000}[outbound])
-		p2pc := newTestConnection(local, address)
-		p2pc.outbound = outbound
-		hello := util.StrIfMap{"version": "test", "chain_height": float64(0), "p2p_id": float64(4242), "my_peers": []any{}}
-		p2pc.handleMsgHello(hello)
-		if got := p2pCoordinator.badPeers.Has(address); got != outbound {
-			t.Errorf("outbound=%v: badPeers.Has(%s) = %v", outbound, address, got)
+// connectionClosed tells if the other end of the connection sees it closed
+func connectionClosed(c *p2pConnection) bool {
+	c.conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
+	_, err := c.conn.Write([]byte("x"))
+	return errors.Is(err, io.ErrClosedPipe)
+}
+
+// An attacker who claims the ID of an honest peer H (all our messages used to tell it) mustn't get H banned or disconnected.
+func TestClaimingAnotherPeersIDBansNobody(t *testing.T) {
+	setupTestSysDbs(t)
+	drainCtrl()
+	const honestID = 777001
+
+	// We are connected to H, and H is also the address we dial
+	h := pipeConnection(t, "198.51.100.1:2017", true)
+	h.handleMsgHello(helloMsg(honestID, 0, "", 0))
+	if !h.handshaken {
+		t.Fatal("H's hello was not accepted")
+	}
+
+	// The attacker, from another IP address, claims H's ID, inbound and outbound
+	for _, outbound := range []bool{false, true} {
+		address := map[bool]string{false: "203.0.113.66:40000", true: "203.0.113.67:2017"}[outbound]
+		attacker := pipeConnection(t, address, outbound)
+		attacker.handleMsgHello(helloMsg(honestID, 0, "", 0))
+		if !attacker.handshaken {
+			t.Errorf("outbound=%v: the attacker's connection was dropped, it is nobody's duplicate", outbound)
 		}
+		for _, bad := range []string{"198.51.100.1:2017", "198.51.100.1", address} {
+			if p2pCoordinator.badPeers.Has(bad) || p2pCoordinator.badHosts.Has(bad) {
+				t.Errorf("outbound=%v: %s was banned", outbound, bad)
+			}
+		}
+	}
+	if connectionClosed(h) || !h.handshaken {
+		t.Error("H's connection was affected")
+	}
+
+	// The other way round: H comes after the attacker. It isn't banned either.
+	h2 := pipeConnection(t, "198.51.100.2:2017", true)
+	h2.handleMsgHello(helloMsg(honestID, 0, "", 0))
+	if !h2.handshaken || p2pCoordinator.badPeers.Has("198.51.100.2:2017") {
+		t.Error("H2 was dropped or banned for a claimed ID")
+	}
+}
+
+// Two connections of one node (the same IP address and ID): the newer one is dropped, and nothing is banned.
+func TestSecondConnectionOfANodeIsDropped(t *testing.T) {
+	setupTestSysDbs(t)
+	drainCtrl()
+	first := pipeConnection(t, "198.51.100.1:40000", false)
+	first.handleMsgHello(helloMsg(777002, 0, "", 0))
+	if !first.handshaken {
+		t.Fatal("the first connection was not accepted")
+	}
+	for _, outbound := range []bool{true, false} {
+		address := map[bool]string{true: "198.51.100.1:2017", false: "198.51.100.1:40001"}[outbound]
+		second := pipeConnection(t, address, outbound)
+		second.handleMsgHello(helloMsg(777002, 0, "", 0))
+		if second.handshaken || !connectionClosed(second) {
+			t.Errorf("outbound=%v: the second connection of the node was kept", outbound)
+		}
+		if p2pCoordinator.badPeers.Has(address) {
+			t.Errorf("outbound=%v: the second connection got the address banned", outbound)
+		}
+	}
+	if connectionClosed(first) || !first.handshaken {
+		t.Error("the first connection was dropped")
+	}
+}
+
+// A connection which claims our ID is dropped and only its own address is avoided. An attacker who learned our ID can't
+// do more than that.
+func TestRealSelfConnectionIsDetected(t *testing.T) {
+	setupTestSysDbs(t)
+	drainCtrl()
+	abAdd("203.0.113.44:2017", "a")
+	abAdd("198.51.100.1:2017", "a")
+	h := pipeConnection(t, "198.51.100.1:2017", true)
+	h.handleMsgHello(helloMsg(777003, 0, "", 0))
+
+	// An inbound one (we have dialed ourselves, this is the other end) is just dropped
+	in := pipeConnection(t, "203.0.113.44:40000", false)
+	in.handleMsgHello(helloMsg(int(p2pEphemeralID), 0, "", 0))
+	if in.handshaken || !connectionClosed(in) {
+		t.Error("an inbound connection with our ID was kept")
+	}
+	if selfInfo.isSelf("203.0.113.44") {
+		t.Error("an inbound claim makes an address ours")
+	}
+	if p2pCoordinator.badPeers.Has("203.0.113.44:40000") {
+		t.Error("the random source port of an inbound connection was banned")
+	}
+
+	// An outbound one is the address we have dialed: it's ours (or its owner says so)
+	out := pipeConnection(t, "203.0.113.44:2017", true)
+	out.savedAddress = "203.0.113.44:2017"
+	out.handleMsgHello(helloMsg(int(p2pEphemeralID), 0, "", 0))
+	if out.handshaken || !connectionClosed(out) {
+		t.Error("an outbound connection to ourselves was kept")
+	}
+	defer selfInfo.lock.With(func() { selfInfo.selfHosts = make(map[string]time.Time) })
+	if !selfInfo.isSelf("203.0.113.44") || !p2pCoordinator.badPeers.Has("203.0.113.44:2017") || bookHas("203.0.113.44:2017") {
+		t.Error("the address of the connection to ourselves is not avoided")
+	}
+
+	// The honest peer is not touched by any of this
+	if selfInfo.isSelf("198.51.100.1") || p2pCoordinator.badPeers.Has("198.51.100.1:2017") || !bookHas("198.51.100.1:2017") {
+		t.Error("H's address was affected")
+	}
+	if connectionClosed(h) || !h.handshaken {
+		t.Error("H's connection was dropped")
+	}
+}
+
+// Messages other than hello don't carry the ID
+func TestOnlyHelloCarriesTheID(t *testing.T) {
+	ping, err := json.Marshal(p2pMsgPingStruct{p2pMsgHeader{Root: "r", Msg: p2pMsgPing}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(ping), "p2p_id") {
+		t.Errorf("a ping has the ID: %s", ping)
+	}
+	hello, _ := json.Marshal(p2pMsgHelloStruct{p2pMsgHeader: p2pMsgHeader{P2pID: 5, Msg: p2pMsgHello}})
+	if !strings.Contains(string(hello), `"p2p_id":5`) {
+		t.Errorf("the hello has no ID: %s", hello)
 	}
 }

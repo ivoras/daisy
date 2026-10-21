@@ -2,18 +2,12 @@ package daisy
 
 import (
 	"bufio"
-	"bytes"
-	"compress/zlib"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
-	"net/http"
-	"os"
 	"slices"
 	"strconv"
 	"sync/atomic"
@@ -28,7 +22,7 @@ const p2pClientVersionString = "godaisy/0.3"
 type p2pMsgHeader struct {
 	Root  string `json:"root"`
 	Msg   string `json:"msg"`
-	P2pID int64  `json:"p2p_id"`
+	P2pID int64  `json:"p2p_id,omitempty"` // Only in the hello
 }
 
 // The hello message
@@ -40,8 +34,7 @@ type p2pMsgHelloStruct struct {
 	ChainHeight int      `json:"chain_height"`
 	MyPeers     []string `json:"my_peers"`
 
-	// The last block of the sender's best chain, and the total score of the chain (see blockScore). Older versions
-	// don't send these, in which case only the heights can be compared.
+	// The last block of the sender's best chain, and the total score of the chain (see blockScore)
 	TipHash    string `json:"tip_hash"`
 	ChainScore int    `json:"chain_score"`
 
@@ -51,6 +44,13 @@ type p2pMsgHelloStruct struct {
 
 	// The address (without the port) that the sender sees the receiver at
 	ObservedHost string `json:"observed_host"`
+}
+
+// The message which shows that the sender is alive, sent now and then so that a quiet connection isn't closed
+const p2pMsgPing = "ping"
+
+type p2pMsgPingStruct struct {
+	p2pMsgHeader
 }
 
 // The message asking for block hashes
@@ -109,7 +109,14 @@ type p2pConnection struct {
 	savedAddress      string                    // outbound: the address under which the peer is saved in the database
 	handshaken        bool                      // the peer has sent a valid hello. Changed with the p2pPeers lock held, only by the connection's goroutine.
 	protocol          atomic.Int32              // the version of the protocol that the peer speaks, from its hello
+	ready             atomic.Bool               // like handshaken, for the goroutine which reads from the connection
+	helloReceived     bool                      // the peer's first hello has arrived (valid or not); the later ones are ignored
+	host              string                    // the IP address of the peer, without the port
 	incoming          map[string]*incomingBlock // the blocks being received in chunks. Only used by the connection's goroutine.
+	requested         map[string]time.Time      // the blocks which we have asked the peer for. Only used by the connection's goroutine.
+	blockReqs         blockRequests             // the blocks which the peer has asked us for. Only used by the connection's goroutine.
+	sync              syncState                 // how far we have got with the peer's chain, guarded by syncLock
+	syncLock          util.WithMutex
 	peer              *bufio.ReadWriter
 	peerID            int64
 	isConnectable     bool // using the default port
@@ -140,23 +147,23 @@ const (
 	p2pMaxInbound  = 128
 	p2pMaxOutbound = 32
 
+	// How many connections one host can have to us
+	p2pMaxInboundPerHost = 4
+
 	// How far back from the tip the hashes of the blocks are compared with the peers' to detect a competing branch
 	reorgSearchWindow = 32
 )
 
-var p2pDialer = &net.Dialer{Timeout: p2pDialTimeout}
+// A connection must say hello within p2pHelloTimeout, and after that must be heard from at least every p2pIdleTimeout.
+// The nodes send a "ping" to each other every p2pPingInterval, so a quiet but healthy peer is not mistaken for a dead one.
+// Variables so that the tests can make them short.
+var (
+	p2pHelloTimeout = 20 * time.Second
+	p2pIdleTimeout  = 5 * time.Minute
+	p2pPingInterval = 30 * time.Second
+)
 
-// HTTP client for fetching blocks from peers (the "http" block encoding).
-var p2pHTTPClient = &http.Client{
-	Timeout: 30 * time.Minute, // The whole exchange including the body, blocks can be large
-	// Never follow redirects: they would lead away from the peer we have agreed to talk to
-	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	Transport: &http.Transport{
-		DialContext:           p2pDialer.DialContext,
-		TLSHandshakeTimeout:   p2pDialTimeout,
-		ResponseHeaderTimeout: 30 * time.Second,
-	},
-}
+var p2pDialer = &net.Dialer{Timeout: p2pDialTimeout}
 
 // send queues a message for sending to the peer. It never blocks, so it is safe to call from
 // anywhere, including from the connection's own message handlers and while holding locks.
@@ -324,10 +331,46 @@ func (p *p2pPeersSet) Count(outbound bool) int {
 	return n
 }
 
+// CountInboundFrom returns the number of the connections which the given host has made to us
+func (p *p2pPeersSet) CountInboundFrom(host string) int {
+	n := 0
+	p.lock.With(func() {
+		for peer := range p.peers {
+			if !peer.outbound && peer.host == host {
+				n++
+			}
+		}
+	})
+	return n
+}
+
 // markHandshaken records that the peer has said hello. If we have connected to the peer using the default port,
 // that also tells that others can connect to it.
 func (p *p2pPeersSet) markHandshaken(c *p2pConnection) {
+	p.handshake(c, c.peerID)
+}
+
+// handshake records the ID which the peer has claimed in its hello and marks the connection as handshaken, unless it
+// is a duplicate: an already handshaken connection from the same host claims the same ID, which is what the second
+// connection of one node looks like. The ID is not proof of anything (anybody can claim any ID), so a connection is
+// only a duplicate of one from the same IP address, and all that is done about it is that the newer one is dropped by the
+// caller; no address is banned.
+func (p *p2pPeersSet) handshake(c *p2pConnection, id int64) (duplicate bool) {
 	p.lock.With(func() {
+		c.peerID = id
+		if c.host == "" && c.conn != nil {
+			c.host, _ = remoteHost(c.conn.RemoteAddr())
+		}
+		if c.host != "" {
+			for other := range p.peers {
+				if other != c && other.handshaken && other.peerID == id && other.host == c.host {
+					log.Printf("%v looks like a second connection of %v (%x), dropping it.", c.address, other.address, id)
+					duplicate = true
+					return
+				}
+			}
+		}
+		c.ready.Store(true)
 		c.handshaken = true
 		if c.outbound {
 			if _, port, err := util.SplitAddress(c.address); err == nil && port == DefaultP2PPort {
@@ -335,6 +378,7 @@ func (p *p2pPeersSet) markHandshaken(c *p2pConnection) {
 			}
 		}
 	})
+	return duplicate
 }
 
 func (p *p2pPeersSet) HasAddress(address string) bool {
@@ -408,15 +452,12 @@ func (p *p2pPeersSet) tryPeersConnectable() {
 		if err != nil {
 			log.Println(err)
 		}
-		if c.peer.protocol.Load() >= 2 {
-			// Let the peer know that we have been able to connect to it, which is not something that it can find out
-			c.peer.send(p2pMsgReachableStruct{
-				P2pID: p2pEphemeralID,
-				Root:  chainParams.GenesisBlockHash,
-				Msg:   p2pMsgReachable,
-				Port:  DefaultP2PPort,
-			})
-		}
+		// Let the peer know that we have been able to connect to it, which is not something that it can find out
+		c.peer.send(p2pMsgReachableStruct{
+			Root: chainParams.GenesisBlockHash,
+			Msg:  p2pMsgReachable,
+			Port: DefaultP2PPort,
+		})
 	}
 }
 
@@ -480,6 +521,11 @@ func p2pServer() {
 		}
 		if p2pPeers.Count(false) >= p2pMaxInbound {
 			log.Println("Too many connections, refusing", conn.RemoteAddr().String())
+			conn.Close()
+			continue
+		}
+		if host, err := remoteHost(conn.RemoteAddr()); err == nil && p2pPeers.CountInboundFrom(host) >= p2pMaxInboundPerHost {
+			log.Println("Too many connections from", host+", refusing", conn.RemoteAddr().String())
 			conn.Close()
 			continue
 		}
@@ -550,12 +596,10 @@ func (p2pc *p2pConnection) handleConnection() {
 	// XXX: the state machine shouldn't start by the listener sending something
 	// (security best practices)
 	helloMsg := p2pMsgHelloStruct{
-		P2pID:       p2pEphemeralID,
-		Root:        chainParams.GenesisBlockHash,
-		Msg:         p2pMsgHello,
-		Version:     p2pClientVersionString,
-		ChainHeight: dbGetBlockchainHeight(),
-		MyPeers:     p2pPeers.GetAddresses(true),
+		p2pMsgHeader: p2pMsgHeader{P2pID: p2pEphemeralID, Root: chainParams.GenesisBlockHash, Msg: p2pMsgHello},
+		Version:      p2pClientVersionString,
+		ChainHeight:  dbGetBlockchainHeight(),
+		MyPeers:      p2pPeers.GetAddresses(true),
 
 		Protocol:    p2pProtocolVersion,
 		MinProtocol: p2pMinProtocolVersion,
@@ -574,6 +618,9 @@ func (p2pc *p2pConnection) handleConnection() {
 		return
 	}
 	log.Println("Handling connection", p2pc.address)
+
+	// The peer has to say hello soon. (Once it has, the deadline is moved further with each message.)
+	p2pc.setReadDeadline(p2pHelloTimeout)
 
 	// Closed when this function returns, so the reader goroutine can never get stuck handing over a message
 	quit := make(chan struct{})
@@ -618,6 +665,9 @@ func (p2pc *p2pConnection) handleConnection() {
 				log.Printf("Received message from %v for a different chain than mine (%s vs %s). Ignoring.", p2pc.conn, root, chainParams.GenesisBlockHash)
 				continue
 			}
+			if p2pc.ready.Load() {
+				p2pc.setReadDeadline(p2pIdleTimeout)
+			}
 			if !toLoop(msg) {
 				break
 			}
@@ -625,7 +675,7 @@ func (p2pc *p2pConnection) handleConnection() {
 		log.Println("Shutting down receiver for", p2pc.address)
 	}()
 
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(p2pPingInterval)
 	defer ticker.Stop()
 
 	// The message handlers below run in this loop and only ever queue replies with send(), which
@@ -661,9 +711,15 @@ func (p2pc *p2pConnection) handleConnection() {
 				p2pc.handleBlockChunk(msg)
 			case p2pMsgReachable:
 				p2pc.handleReachable(msg)
+			case p2pMsgPing:
+				// Nothing to do, it was only to show that the peer is alive. That has reset the read deadline.
 			}
 		case <-ticker.C:
 			p2pc.expireIncomingBlocks()
+			if p2pc.handshaken {
+				p2pc.send(p2pMsgPingStruct{Root: chainParams.GenesisBlockHash, Msg: p2pMsgPing})
+				p2pc.continueSync()
+			}
 		case <-p2pc.outboxReady:
 		}
 		if err := p2pc.flushOutbox(); err != nil {
@@ -674,30 +730,48 @@ func (p2pc *p2pConnection) handleConnection() {
 }
 
 func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
+	if p2pc.helloReceived {
+		// Everything in a hello is processed once: it adds peers, votes about our address and sets the protocol
+		return
+	}
+	p2pc.helloReceived = true
 	var ver string
 	var err error
 	if ver, err = msg.GetString("version"); err != nil {
-		log.Println(p2pc.conn, err)
+		log.Println(p2pc.address, err)
+		p2pc.conn.Close()
 		return
 	}
 	if p2pc.chainHeight, err = msg.GetInt("chain_height"); err != nil {
-		log.Println(p2pc.conn, err)
+		log.Println(p2pc.address, err)
+		p2pc.conn.Close()
 		return
 	}
-	if p2pc.peerID == 0 {
-		if p2pc.peerID, err = msg.GetInt64("p2p_id"); err != nil {
-			log.Println(p2pc.conn, err)
-			return
-		}
+	tipHash, err := msg.GetString("tip_hash")
+	if err != nil {
+		log.Println(p2pc.address, err)
+		p2pc.conn.Close()
+		return
 	}
-	protocol, minProtocol := 1, 1 // A node which doesn't say speaks the original protocol
-	if v, err := msg.GetInt("protocol"); err == nil {
-		protocol = v
+	chainScore, err := msg.GetInt("chain_score")
+	if err != nil {
+		log.Println(p2pc.address, err)
+		p2pc.conn.Close()
+		return
 	}
-	if v, err := msg.GetInt("min_protocol"); err == nil {
-		minProtocol = v
+	peerID, err := msg.GetInt64("p2p_id")
+	if err != nil {
+		log.Println(p2pc.address, err)
+		p2pc.conn.Close()
+		return
 	}
-	if err = p2pCheckProtocol(protocol, minProtocol); err != nil {
+	// A node which doesn't say which versions it speaks is of an old version which isn't supported
+	protocol, protoErr := msg.GetInt("protocol")
+	minProtocol, minProtoErr := msg.GetInt("min_protocol")
+	if err = errors.Join(protoErr, minProtoErr); err == nil {
+		err = p2pCheckProtocol(protocol, minProtocol)
+	}
+	if err != nil {
 		log.Printf("Not talking to %v: %v", p2pc.address, err)
 		if p2pc.outbound {
 			p2pCoordinator.badPeers.Add(p2pc.address)
@@ -706,55 +780,44 @@ func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
 		return
 	}
 	p2pc.protocol.Store(int32(protocol))
-	if seenAs, err := msg.GetString("observed_host"); err == nil {
-		if peerHost, err := remoteHost(p2pc.conn.RemoteAddr()); err == nil {
-			selfInfo.observe(seenAs, peerHost)
-		}
-	}
-	var remotePeers []string
-	if remotePeers, err = msg.GetStringList("my_peers"); err == nil {
-		if peerHost, err := remoteHost(p2pc.conn.RemoteAddr()); err == nil {
-			// A peer on a private network may tell about its neighbours, others may not
-			p2pCtrlSend(p2pCtrlMessage{msgType: p2pCtrlConnectPeers, payload: p2pConnectPeersRequest{
-				addresses: remotePeers, source: peerHost, allowPrivate: isPrivateHost(peerHost)}})
-		}
-	}
-	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.address, ver, p2pc.peerID, p2pc.chainHeight)
-	// Check for duplicates
-	dup := false
-	p2pPeers.lock.With(func() {
-		for p := range p2pPeers.peers {
-			if p.peerID == p2pc.peerID && p != p2pc {
-				log.Printf("%v looks like a duplicate of %v (%x), dropping it.", p2pc.address, p.address, p2pc.peerID)
-				dup = true
-				return
-			}
-		}
-	})
-	if p2pc.peerID == p2pEphemeralID {
-		log.Printf("%v is apparently myself (%x). Dropping it.", p2pc.conn, p2pc.peerID)
-		dup = true
-		if host, err := remoteHost(p2pc.conn.RemoteAddr()); err == nil && p2pc.outbound {
-			selfInfo.addSelfHost(host)
+	peerHost, hostErr := remoteHost(p2pc.conn.RemoteAddr())
+
+	// The ID is only good for finding out that we have connected to ourselves. Anyone can claim any ID (all our messages
+	// have told it), so a connection which claims our ID is dropped, and what is forgotten is its own address, nobody else's.
+	if peerID == p2pEphemeralID {
+		log.Printf("%v is apparently myself (%x). Dropping it.", p2pc.address, peerID)
+		if hostErr == nil && p2pc.outbound {
+			selfInfo.addSelfHost(peerHost)
+			p2pCoordinator.badPeers.Add(p2pc.address) // The address that we dialed, which is the one that claimed to be us
 			if p2pc.savedAddress != "" {
 				abForget(p2pc.savedAddress)
 			}
 		}
-	}
-	if dup {
-		if p2pc.outbound {
-			// Remember the address we dialed so that we don't keep dialing it. For inbound connections
-			// the address has a random source port which says nothing about the peer.
-			p2pCoordinator.badPeers.Add(p2pc.address)
-		}
-		err = p2pc.conn.Close()
-		if err != nil {
+		if err = p2pc.conn.Close(); err != nil {
 			log.Printf("p2pc.conn.Close: %v", err)
 		}
 		return
 	}
+	// Two connections of the same node: the newer one is dropped, which doesn't say anything bad about the peer
+	if p2pPeers.handshake(p2pc, peerID) {
+		if err = p2pc.conn.Close(); err != nil {
+			log.Printf("p2pc.conn.Close: %v", err)
+		}
+		return
+	}
+	p2pc.setReadDeadline(p2pIdleTimeout)
+
+	// What the peer says about us counts only if we have chosen the peer, and only once per peer host
+	if seenAs, err := msg.GetString("observed_host"); err == nil && p2pc.outbound && hostErr == nil {
+		selfInfo.observe(seenAs, peerHost)
+	}
+	if remotePeers, err := msg.GetStringList("my_peers"); err == nil && hostErr == nil {
+		// A peer on a private network may tell about its neighbours, others may not
+		p2pCtrlSend(p2pCtrlMessage{msgType: p2pCtrlConnectPeers, payload: p2pConnectPeersRequest{
+			addresses: remotePeers, source: peerHost, allowPrivate: isPrivateHost(peerHost)}})
+	}
+	log.Printf("Hello from %v %s (%x) %d blocks", p2pc.address, ver, peerID, p2pc.chainHeight)
 	p2pc.refreshTime = time.Now()
-	p2pPeers.markHandshaken(p2pc)
 	if p2pc.outbound && p2pc.savedAddress != "" {
 		// A real peer of our chain: only now it's worth remembering
 		abGood(p2pc.savedAddress)
@@ -766,11 +829,7 @@ func (p2pc *p2pConnection) handleMsgHello(msg util.StrIfMap) {
 		log.Println(err)
 		return
 	}
-	better := p2pc.chainHeight > tip.Height
-	if tipHash, err := msg.GetString("tip_hash"); err == nil && tipHash != "" && tipHash != tip.Hash {
-		score, _ := msg.GetInt("chain_score")
-		better = better || score > tip.TotalScore || (score == tip.TotalScore && tipHash < tip.Hash)
-	}
+	better := tipHash != tip.Hash && (chainScore > tip.TotalScore || (chainScore == tip.TotalScore && tipHash < tip.Hash))
 	if better {
 		p2pCtrlSend(p2pCtrlMessage{msgType: p2pCtrlSearchForBlocks, payload: p2pSearchRequest{p2pc, p2pc.chainHeight}})
 	}
@@ -793,181 +852,89 @@ func (p2pc *p2pConnection) requestBlock(hash string) {
 		return
 	}
 	log.Println("Requesting block", hash)
+	p2pc.noteRequested(hash)
 	p2pc.send(p2pMsgGetBlockStruct{
-		P2pID: p2pEphemeralID,
-		Root:  chainParams.GenesisBlockHash,
-		Msg:   p2pMsgGetBlock,
-		Hash:  hash,
+		Root: chainParams.GenesisBlockHash,
+		Msg:  p2pMsgGetBlock,
+		Hash: hash,
 	})
 }
 
-// Handle getblockhashes
-func (p2pc *p2pConnection) handleGetBlockHashes(msg util.StrIfMap) {
-	var minBlockHeight int
-	var maxBlockHeight int
-	var err error
-	if minBlockHeight, err = msg.GetInt("min_block_height"); err != nil {
-		log.Println(p2pc.conn, err)
+// setReadDeadline gives the peer this long to send the next message. The deadline applies to the reading of a whole
+// message, so a peer can't keep a connection by sending a byte now and then.
+func (p2pc *p2pConnection) setReadDeadline(d time.Duration) {
+	if p2pc.conn == nil {
 		return
 	}
-	if maxBlockHeight, err = msg.GetInt("max_block_height"); err != nil {
-		log.Println(p2pc.conn, err)
-		return
+	if err := p2pc.conn.SetReadDeadline(time.Now().Add(d)); err != nil {
+		log.Println("Cannot set the read deadline for", p2pc.address+":", err)
 	}
-	log.Printf("*** Sending block hashes from %d to %d to %s", minBlockHeight, maxBlockHeight, p2pc.address)
-	respMsg := p2pMsgBlockHashesStruct{
-		P2pID:  p2pEphemeralID,
-		Root:   chainParams.GenesisBlockHash,
-		Msg:    p2pMsgBlockHashes,
-		Hashes: dbGetHeightHashes(minBlockHeight, maxBlockHeight),
-	}
-	p2pc.send(respMsg)
 }
 
-// Handle receiving blockhashes
-func (p2pc *p2pConnection) handleBlockHashes(msg util.StrIfMap) {
-	var hashes map[int]string
-	var err error
-	if hashes, err = msg.GetIntStringMap("hashes"); err != nil {
-		log.Println(p2pc.conn, err)
-		return
+// noteRequested remembers that we have asked the peer for the block, so that it is welcome when it comes. The list is
+// bounded and its entries expire.
+func (p2pc *p2pConnection) noteRequested(hash string) {
+	if p2pc.requested == nil {
+		p2pc.requested = make(map[string]time.Time)
 	}
-	heights := make([]int, len(hashes))
-	n := 0
-	for h := range hashes {
-		heights[n] = h
-		n++
-	}
-	slices.Sort(heights)
-	log.Println("handleBlockHashes: got", len(heights), "hashes")
-	myHeight := dbGetBlockchainHeight()
-	for _, h := range heights {
-		if h < myHeight-maxReorgDepth {
-			// Such a branch would not be accepted anyway
-			continue
+	if len(p2pc.requested) >= p2pMaxRequestedBlocks {
+		for h, t := range p2pc.requested {
+			if time.Since(t) > p2pRequestedBlockTTL {
+				delete(p2pc.requested, h)
+			}
 		}
-		if dbBlockHashKnown(hashes[h]) {
-			// On the best chain, or on another branch
-			continue
+		if len(p2pc.requested) >= p2pMaxRequestedBlocks {
+			return
 		}
-		p2pc.requestBlock(hashes[h])
 	}
+	p2pc.requested[hash] = time.Now()
+}
+
+// takeRequested tells if we have asked the peer for the block lately, and forgets that
+func (p2pc *p2pConnection) takeRequested(hash string) bool {
+	t, ok := p2pc.requested[hash]
+	delete(p2pc.requested, hash)
+	return ok && time.Since(t) <= p2pRequestedBlockTTL
 }
 
 // getblock: a request to transfer a block
 func (p2pc *p2pConnection) handleGetBlock(msg util.StrIfMap) {
 	hash, err := msg.GetString("hash")
 	if err != nil {
-		log.Println(p2pc.conn, err)
+		log.Println(p2pc.address, err)
 		return
 	}
-	dbb, onBestChain, err := dbGetAnyBlock(hash)
-	if err != nil {
-		log.Println(p2pc.conn, err)
+	if !isBlockHash(hash) {
 		return
 	}
-	fileName := sideBlockFilename(dbb.Hash)
-	if onBestChain {
-		fileName = blockchainGetFilename(dbb.Height)
-	}
-	st, err := os.Stat(fileName)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	fileSize := st.Size()
-
-	if p2pc.protocol.Load() >= 2 {
-		// The block goes over the connection which the peer has opened, no other connection is needed
-		sender, err := newBlockSender(hash, dbb.HashSignature, fileName)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		p2pc.send(sender)
-		log.Println("*** Sending block", hash, "to", p2pc.address)
-		return
-	}
-
-	var msgBlockEncoding, msgBlockData string
-
-	if cfg.p2pBlockInline && fileSize <= p2pMaxInlineBlockSize {
-		f, err := os.Open(fileName)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		defer func() {
-			err = f.Close()
-			if err != nil {
-				log.Printf("handleGetBlock f.Close: %v", err)
-			}
-		}()
-		var zbuf bytes.Buffer
-		w := zlib.NewWriter(&zbuf)
-		written, err := io.Copy(w, f)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		if written != fileSize {
-			log.Println("Something broke when working with zlib:", written, "vs", fileSize)
-			return
-		}
-		err = w.Close()
-		if err != nil {
-			log.Panic(err)
-		}
-		msgBlockEncoding = "zlib-base64"
-		msgBlockData = base64.StdEncoding.EncodeToString(zbuf.Bytes())
-	} else {
-		msgBlockEncoding = "http"
-		// The receiver only uses the port and the block number from this URL, and connects to our address as it knows it.
-		host := "localhost"
-		if addresses := util.LocalAddresses(); len(addresses) > 0 {
-			host = addresses[0]
-		}
-		msgBlockData = fmt.Sprintf("http://%s/block/%s", net.JoinHostPort(host, strconv.Itoa(cfg.httpPort)), dbb.Hash)
-		log.Println("*** Instructing the peer to get a block from", msgBlockData)
-	}
-
-	respMsg := p2pMsgBlockStruct{
-		P2pID:         p2pEphemeralID,
-		Root:          chainParams.GenesisBlockHash,
-		Msg:           p2pMsgBlock,
-		Hash:          hash,
-		HashSignature: hex.EncodeToString(dbb.HashSignature),
-		Encoding:      msgBlockEncoding,
-		Data:          msgBlockData,
-		Size:          fileSize,
-	}
-	p2pc.send(respMsg)
-	log.Println("*** Sent block", hash, "to", p2pc.address)
+	p2pc.requestBlockToSend(hash)
 }
 
-// block: A block is received
+// block: A block is coming. Its data follow in "blockchunk" messages. Nothing is reserved or stored for it until it's clear that
+// the block is worth receiving: it is a block which we have asked for, or it is signed by one of the keys that we know.
 func (p2pc *p2pConnection) handleBlock(msg util.StrIfMap) {
 	hash, err := msg.GetString("hash")
 	if err != nil {
-		log.Println(err)
+		log.Println(p2pc.address, err)
+		return
+	}
+	if !isBlockHash(hash) {
+		log.Println("Rejecting block with a bad hash from", p2pc.address)
 		return
 	}
 	hashSignature, err := msg.GetString("hash_signature")
 	if err != nil {
-		log.Println(err)
+		log.Println(p2pc.address, err)
 		return
 	}
-	dataString, err := msg.GetString("data")
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	if dbBlockHashKnown(hash) {
+	signature, err := hex.DecodeString(hashSignature)
+	if err != nil || len(signature) == 0 || len(signature) > p2pMaxSignatureSize {
+		log.Println("Rejecting block", hash, "from", p2pc.address+": bad signature")
 		return
 	}
 	fileSize, err := msg.GetInt64("size")
 	if err != nil {
-		log.Println(err)
+		log.Println(p2pc.address, err)
 		return
 	}
 	if err = checkBlockSize(fileSize); err != nil {
@@ -975,56 +942,21 @@ func (p2pc *p2pConnection) handleBlock(msg util.StrIfMap) {
 		return
 	}
 	encoding, err := msg.GetString("encoding")
-	if err != nil {
-		log.Printf("encoding: %v", err)
+	if err != nil || encoding != p2pEncodingChunked {
+		log.Println("Unknown block encoding from", p2pc.address+":", encoding)
 		return
 	}
-	if encoding == p2pEncodingChunked {
-		// The pieces follow
-		p2pc.startIncomingBlock(hash, hashSignature, fileSize)
+	if _, ok := p2pc.incoming[hash]; ok || len(p2pc.incoming) >= p2pMaxIncomingTransfers {
+		return // Cheap to find out, and the signature isn't worth checking
+	}
+	if dbBlockHashKnown(hash) {
 		return
 	}
-	if encoding != "zlib-base64" && encoding != "http" {
-		log.Println("Unknown block encoding:", encoding)
+	if !p2pc.takeRequested(hash) && !signedByKnownSignatory(hash, signature) {
+		log.Println("Rejecting block", hash, "from", p2pc.address+": it's not signed by a known key, and we haven't asked for it")
 		return
 	}
-	var blockURL string
-	if encoding == "http" {
-		if blockURL, err = blockHTTPURL(dataString, p2pc.conn.RemoteAddr()); err != nil {
-			log.Println("Rejecting block", hash, "from", p2pc.address+":", err)
-			return
-		}
-	}
-
-	blockFile, err := os.CreateTemp("", "daisy")
-	if err != nil {
-		log.Println("Error creating temp file", err)
-		return
-	}
-	defer func() {
-		if err := blockFile.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
-			log.Printf("handleBlock blockFile.Close: %v", err)
-		}
-		if err := os.Remove(blockFile.Name()); err != nil {
-			log.Printf("remove: %v", err)
-		}
-	}()
-	if encoding == "http" {
-		log.Println("Getting block", hash, "from", blockURL)
-		err = downloadHTTPBlock(blockFile, blockURL, fileSize)
-	} else {
-		err = downloadInlineBlock(blockFile, dataString, fileSize)
-	}
-	if err != nil {
-		log.Println("Error receiving block", hash, "from", p2pc.address+":", err)
-		return
-	}
-	if err = blockFile.Close(); err != nil {
-		log.Printf("handleBlock blockFile.Close: %v", err)
-		return
-	}
-
-	p2pc.importBlock(blockFile.Name(), hash, hashSignature)
+	p2pc.startIncomingBlock(hash, hashSignature, fileSize)
 }
 
 // Connect to a peer. Does everything except starting the handler goroutine.
@@ -1073,6 +1005,9 @@ func p2pSetupPeer(address string, conn net.Conn, outbound bool) (*p2pConnection,
 		outbound:     outbound,
 		chanFromPeer: make(chan util.StrIfMap, 5),
 		outboxReady:  make(chan struct{}, 1),
+	}
+	if host, err := remoteHost(conn.RemoteAddr()); err == nil {
+		p2pc.host = host
 	}
 	p2pPeers.Add(&p2pc)
 	return &p2pc, nil

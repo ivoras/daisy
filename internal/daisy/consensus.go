@@ -1,13 +1,18 @@
 package daisy
 
 import (
+	"errors"
 	"fmt"
+	"slices"
+	"time"
 
 	"github.com/ivoras/daisy/internal/dcrypto"
 )
 
 /*
- * Choosing between competing branches of the block tree.
+ * The rules of the block tree.
+ *
+ * Choosing between competing branches.
  *
  * Any signatory may sign a block at any time, so two of them can extend the same block at the same time, and
  * the blockchain forks. To make all the nodes pick the same branch, every block gets a score, and the branch
@@ -22,10 +27,48 @@ import (
  *    is not a race of who is faster, or who has the better connectivity.
  *  - Nobody is prevented from signing out of turn (so a signatory that's offline doesn't block the others), but
  *    such blocks lose to the blocks which are in turn, and a branch of out of turn blocks needs to be twice as long.
- *  - With one signatory, all the blocks score 2, and the best chain is just the longest chain, as before.
+ *  - With one signatory, all the blocks score 2, and the best chain is just the longest chain.
  *
- * Only the choice of the branch depends on the scores, not the validity of the blocks, so all the blocks which were
- * valid before are still valid.
+ * Limiting how fast a branch can grow.
+ *
+ * The score alone is not enough: a single rogue signatory could sign hundreds of blocks in a few seconds, and
+ * replace up to maxReorgDepth blocks of honest history with a longer branch. So there are two more rules, which
+ * make a block invalid (and not just a loser):
+ *
+ *  - Timestamps. Every block above the genesis block has a Timestamp in its _meta table (which is part of the hashed
+ *    file). It must be at least the block period (ChainParams.BlockPeriodSeconds, one second if not set) later than
+ *    the timestamp of the previous block, and no more than maxFutureDrift in the future by the clock of the node
+ *    which is checking the block. So a branch can't grow faster than one block per period, and can't get ahead of the
+ *    wall clock by more than the drift. The future check is only made when a block arrives; when the blockchain is
+ *    verified again later, only the order of the timestamps is checked (a block that was fine then, is fine now).
+ *    The file modification time, which is used for the timestamp of the blocks which don't have one, doesn't count.
+ *  - Recently signed (as in Clique). With N active signatories, a signatory may sign at most one of every
+ *    floor(N/2)+1 consecutive blocks: the signers of the previous floor(N/2) blocks of the same branch can't sign the
+ *    block. So a minority of the signatories can't build a branch alone, not even slowly, because they need the
+ *    others to sign the blocks in between. The price is availability: with N=2 both signatories must be online and
+ *    take turns (neither can sign two blocks in a row), with N=3 or N=4 nobody can sign two blocks in a row, and so on.
+ *    With N=1 there is no constraint. The genesis block is not counted as signed by anybody. Adding or revoking a
+ *    key changes N from the next block on.
+ *
+ * Key operations.
+ *
+ * A key operation (adding or revoking a signatory key) needs signatures of a majority of the active signatories before
+ * the block: floor(N/2)+1 of N, at every height above the genesis block (KeyOpQuorum). The recently-signed rule above
+ * only holds if nobody can get around it by adding keys, and with a smaller quorum a minority could do just that: with
+ * a quorum of one, any single signatory could add keys it controls, become the majority, and then sign every block.
+ * (Clique does it the same way.) The quorum used to grow with the height of the block (QuorumForHeight, about 2*ln(H)
+ * from block 149 on) and was capped by the majority. That is gone: below the cap it was a minority (unsafe), and above
+ * the majority it would only make the keys of a chain with few signatories impossible to change. There is no reason
+ * for the quorum to depend on the height at all. The genesis block adds the first keys with the signature of just one
+ * of them (the creator, who is the only signatory before it); that exception cannot be avoided, and the block is
+ * pinned by its hash. The signatures are over a message which says which operation is signed, and on which chain
+ * (dcrypto.KeyOpMessage), so they can't be reused for another operation, or on another chain. The genesis block is
+ * the exception: the key operations in it are signed in the old format, which only signs the hash of the key (the
+ * embedded genesis block is made that way, and it can't change, as its hash is the identity of the chain). The
+ * genesis block is pinned by its hash anyway, so there is exactly one genesis rule: the old format, and high-S
+ * signatures are fine. All the other signatures (of key ops, and of block hashes) must be low-S.
+ *
+ * Only the choice of the branch depends on the scores, not the validity of the blocks.
  */
 const (
 	scoreInTurn    = 2
@@ -34,6 +77,9 @@ const (
 	// A branch which forks off the best chain more than this many blocks below its tip is ignored. Otherwise a
 	// long forgotten (maybe revoked) key could be used to rewrite history.
 	maxReorgDepth = 128
+
+	// A block can't have a timestamp which is later than this by the clock of the node which checks it.
+	maxFutureDrift = 15 * time.Second
 )
 
 // inTurnSigner returns the hash of the key of the signatory whose turn it is to sign the block of the given height
@@ -65,9 +111,36 @@ func isBetterTip(candidate, current *DbBlockchainBlock) bool {
 	return candidate.Hash < current.Hash
 }
 
+// recentSignerWindow returns how many of the last blocks of a branch can't be signed again by their signers, given the
+// keys as of the previous block: a signatory may sign one of every window+1 consecutive blocks.
+func recentSignerWindow(keys *keySet) int {
+	return len(keys.active()) / 2
+}
+
+// KeyOpQuorum returns the number of signatures which a key operation needs, if there are the given number of active
+// signatories before the block: a majority of them, whatever the height of the block.
+func KeyOpQuorum(activeSigners int) int {
+	return activeSigners/2 + 1
+}
+
+// blockContext is what validateBlock needs to know about the chain and the world, besides the signatory keys
+type blockContext struct {
+	// The hash of the genesis block, which the key operations are bound to
+	genesisHash string
+	// The timestamp of the previous block. Zero if the previous block is a genesis block which doesn't have one.
+	parentTime time.Time
+	// The current time. If zero, the timestamp of the block is not checked against it.
+	now time.Time
+	// The minimum difference between the timestamps of a block and the one before it
+	blockPeriod time.Duration
+	// The signers of the blocks before this one on its branch, the last one being the signer of the previous block.
+	// Only the last recentSignerWindow(keys) entries are used. The genesis block is not included.
+	recentSigners []string
+}
+
 // validateBlock checks everything about a block that depends on the chain which it extends, given the signatory
-// keys as of the previous block. It doesn't change anything. It returns the key operations of the block.
-func validateBlock(blk *Block, height int, keys *keySet) (map[string][]BlockKeyOp, error) {
+// keys as of the previous block and the context. It doesn't change anything. It returns the key operations of the block.
+func validateBlock(blk *Block, height int, keys *keySet, ctx blockContext) (map[string][]BlockKeyOp, error) {
 	if blk.Version != CurrentBlockVersion {
 		return nil, fmt.Errorf("Unsupported block version: %d", blk.Version)
 	}
@@ -82,27 +155,55 @@ func validateBlock(blk *Block, height int, keys *keySet) (map[string][]BlockKeyO
 	if err != nil {
 		return nil, fmt.Errorf("Cannot decode public key %s: %v", blk.SignaturePublicKeyHash, err)
 	}
-	if err = dcrypto.VerifyHexBytes(sigPubKey, blk.PreviousBlockHash, blk.PreviousBlockHashSignature); err != nil {
+	if err = dcrypto.VerifyHexBytesLowS(sigPubKey, blk.PreviousBlockHash, blk.PreviousBlockHashSignature); err != nil {
 		return nil, fmt.Errorf("Verification of previous block hash has failed: %v", err)
 	}
-	if err = dcrypto.VerifyHexBytes(sigPubKey, blk.Hash, blk.HashSignature); err != nil {
+	if err = dcrypto.VerifyHexBytesLowS(sigPubKey, blk.Hash, blk.HashSignature); err != nil {
 		return nil, fmt.Errorf("Verification of block hash has failed: %v", err)
+	}
+	if err = validateTimestamp(blk, ctx); err != nil {
+		return nil, err
+	}
+	if window := recentSignerWindow(keys); window > 0 {
+		recent := ctx.recentSigners
+		if len(recent) > window {
+			recent = recent[len(recent)-window:]
+		}
+		if slices.Contains(recent, blk.SignaturePublicKeyHash) {
+			return nil, fmt.Errorf("The public key %s signed one of the previous %d blocks, and there are %d signatories, so it can't sign this block",
+				blk.SignaturePublicKeyHash, window, len(keys.active()))
+		}
 	}
 	ops, err := blk.dbGetKeyOps()
 	if err != nil {
 		return nil, err
 	}
-	if err = validateKeyOps(ops, height, keys); err != nil {
+	if err = validateKeyOps(ops, keys, ctx.genesisHash); err != nil {
 		return nil, err
 	}
 	return ops, nil
 }
 
-// validateKeyOps checks the key operations of a block of the given height: each of them must be signed by a quorum
+// validateTimestamp checks the timestamp of a block against the one of the previous block, and the current time
+func validateTimestamp(blk *Block, ctx blockContext) error {
+	if blk.Timestamp.IsZero() {
+		return errors.New("The block has no valid Timestamp in its metadata")
+	}
+	if !ctx.parentTime.IsZero() && blk.Timestamp.Before(ctx.parentTime.Add(ctx.blockPeriod)) {
+		return fmt.Errorf("The block timestamp %s is not at least %s later than the timestamp of the previous block, %s",
+			blk.Timestamp.Format(time.RFC3339), ctx.blockPeriod, ctx.parentTime.Format(time.RFC3339))
+	}
+	if !ctx.now.IsZero() && blk.Timestamp.After(ctx.now.Add(maxFutureDrift)) {
+		return fmt.Errorf("The block timestamp %s is more than %s in the future", blk.Timestamp.Format(time.RFC3339), maxFutureDrift)
+	}
+	return nil
+}
+
+// validateKeyOps checks the key operations of a block: each of them must be signed by a quorum (a majority)
 // of different signatories, and it must make sense (only keys which are not known are added, only keys which are
 // valid are revoked).
-func validateKeyOps(ops map[string][]BlockKeyOp, height int, keys *keySet) error {
-	quorum := QuorumForHeight(height)
+func validateKeyOps(ops map[string][]BlockKeyOp, keys *keySet, genesisHash string) error {
+	quorum := KeyOpQuorum(len(keys.active()))
 	for key, keyOps := range ops {
 		signers := make(map[string]bool)
 		for _, keyOp := range keyOps {
@@ -118,7 +219,7 @@ func validateKeyOps(ops map[string][]BlockKeyOp, height int, keys *keySet) error
 			if err != nil {
 				return fmt.Errorf("Cannot decode public key %s: %v", keyOp.signatureKeyHash, err)
 			}
-			if err = dcrypto.VerifyPublicKeyHashSignature(sigPubKey, key, keyOp.signature); err != nil {
+			if err = dcrypto.VerifyKeyOp(sigPubKey, genesisHash, keyOp.op, key, keyOp.signature); err != nil {
 				return fmt.Errorf("Failed verification of key op for %s by %s", key, keyOp.signatureKeyHash)
 			}
 		}
