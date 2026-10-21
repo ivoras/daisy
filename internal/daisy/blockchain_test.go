@@ -12,7 +12,7 @@ import (
 )
 
 func TestQuorumForHeight(t *testing.T) {
-	// Table from the README
+	// Table from the README (the first term of the quorum, see EffectiveQuorum)
 	for _, tc := range []struct{ height, want int }{
 		{1, 1}, {148, 1},
 		{149, 10}, {245, 11}, {404, 12}, {666, 13}, {1097, 14}, {1809, 15},

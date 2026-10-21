@@ -1,9 +1,22 @@
 package daisy
 
+import "time"
+
 const (
 	ChainConsensusPoA = 0
 	ChainConsensusPoW = 1
 )
+
+// The minimum difference between the timestamps of consecutive blocks, if the chain doesn't say otherwise
+const defaultBlockPeriodSeconds = 1
+
+// blockPeriod returns the minimum difference between the timestamps of two consecutive blocks
+func (cp *ChainParams) blockPeriod() time.Duration {
+	if cp.BlockPeriodSeconds <= 0 {
+		return defaultBlockPeriodSeconds * time.Second
+	}
+	return time.Duration(cp.BlockPeriodSeconds) * time.Second
+}
 
 // ChainParams holds blockchain configuration
 type ChainParams struct {
@@ -27,6 +40,9 @@ type ChainParams struct {
 
 	// URLs of lists of peers (JSON {"peers": ["host:port"]}, a JSON array or one address per line)
 	PeerListURLs []string `json:"peer_list_urls"`
+
+	// The minimum number of seconds between the timestamps of two consecutive blocks. One if not set.
+	BlockPeriodSeconds int `json:"block_period_seconds"`
 
 	// Consensus algorithm used: "PoA", "PoW"
 	ConsensusTypeString string `json:"consensus_type"`

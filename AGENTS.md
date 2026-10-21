@@ -28,7 +28,7 @@ d=$(mktemp -d)
 ./daisy -dir $d/n1 signimportblock some.db             # add a block
 ./daisy -dir $d/n1 query "SELECT * FROM sometable"
 ./daisy -dir $d/n1 -port 12017 -http-port 12018 &       # serve it
-./daisy -dir $d/n2 pull http://localhost:12018          # replicate the genesis block
+./daisy -dir $d/n2 pull -expect-genesis <genesis hash> http://localhost:12018   # replicate the genesis block
 ```
 
 ## Layout
@@ -76,7 +76,19 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
 ## Block tree and fork choice
 
 - `consensus.go`: scoring (in turn 2, out of turn 1), `isBetterTip`, and `validateBlock`/`validateKeyOps`, which are pure
-  functions of the block and a `keySet` (`keyset.go`). Validation never writes anything.
+  functions of the block, a `keySet` (`keyset.go`) and a `blockContext` (genesis hash, the parent's timestamp, "now", the
+  block period, the signers of the previous blocks of the branch). Validation never writes anything. The comment at the top
+  of the file describes all the rules and why they are there; read it before changing any of them.
+- Rules above height 0 (the genesis block is pinned by its hash, so the rules it can't satisfy exempt it): a `Timestamp` in
+  `_meta` at least `block_period_seconds` after the parent's and at most `maxFutureDrift` ahead of the local clock (replaying
+  the chain in `blockchainVerifyEverything` passes no "now", so that check is skipped); a signer may not have signed any of
+  the previous `floor(N/2)` blocks of the branch (`recentSignersOf`, `recentSignerWindow`); low-S signatures; key ops signed
+  over `dcrypto.KeyOpMessage` (op, genesis hash, key hash); key op quorum is `EffectiveQuorum` (`QuorumForHeight` capped to a
+  majority of the active signatories). The genesis block's key ops use the old `SignPublicKeyHash` format, also in `newchain`.
+- Tests: with `testChain`, the timestamps of the blocks advance a second per block from a genesis a day in the past
+  (`newBlockAt` sets one explicitly); `tc.next(prev)` picks a signer who is allowed to sign (in turn if possible), because
+  `tc.inTurn` may return a signer that signed too recently. A scenario with two signatories can't have one of them sign
+  twice in a row: use three.
 - `chainstate.go`: `acceptBlock` is the only way a block enters the chain (P2P and `signimportblock` both use it).
   It serializes on `chainLock`, stores blocks of other branches in `sideblocks`, and `reorganize`s when a branch wins.
   Blocks whose predecessor is unknown wait in `orphanPool` and the missing block is requested from the peer.
@@ -92,8 +104,10 @@ Rule of thumb: anything that touches the global state (`cfg`, `mainDb`, `private
 - **Consensus compatibility.** Block hashes are SHA-256 of the raw SQLite file, and signatures are
   ASN.1-DER ECDSA P-256 over the raw 32-byte hash. The hard-coded genesis block hash/signature in
   `internal/daisy/blockchain.go` must keep verifying against `internal/assets/genesis.db`
-  (`TestEmbeddedGenesisBlock`). `QuorumForHeight` is consensus-critical; it is pinned by a test against
-  the README table. Changing any of these forks the chain.
+  (`TestEmbeddedGenesisBlock`, `TestGenesisBlockKeepsTheOldFormat`): that block has key ops in the old format, a high-S
+  signature and no Timestamp, so every new rule must exempt height 0. `QuorumForHeight` and `EffectiveQuorum` are
+  consensus-critical; the first is pinned by a test against the README table. The key op message
+  (`dcrypto.KeyOpMessage`) is consensus-critical, too. Changing any of these forks the chain.
 - **Never modify `internal/assets/genesis.db`** (or anything that changes its bytes, including opening it
   read-write with SQLite): its hash is the chain's identity.
 - **Block files on disk** are `blocks/<height/65536 as %04x>/block_<height as %08x>.db`. Any code that
@@ -129,7 +143,11 @@ These were found in a review and are tracked here so they aren't mistaken for in
 - P2P has no encryption or authentication. Peers can still lie about who is alive; the address book limits how much of
   it one network or one source can fill, and addresses are remembered as tried only after a valid hello.
 - The p2p protocol is versioned, but the *consensus rules* are not: a change in which blocks are valid would fork the chain
-  and needs an activation height in `chainparams.json` that doesn't exist yet.
+  and needs an activation height in `chainparams.json` that doesn't exist yet. (The rules about timestamps, signing
+  frequency and key op signatures were added before any chain was deployed, so they apply from height 1.)
+- `chainparams.json` (including `block_period_seconds`) is not covered by the genesis block hash, and `daisy pull` takes it
+  from an unauthenticated server; `-expect-genesis` only pins the genesis hash.
+- With few signatories the recently-signed rule needs most of them online: with two, both (see `consensus.go`).
 - Fork choice is by score only; there is no finality, and a branch deeper than `maxReorgDepth` is never accepted,
   so a node that was offline for longer than that during a fork must be re-created (`daisy pull`).
 - `mining.CountStartZeroBits` counts zero bits across all bytes rather than only leading ones (the PoW

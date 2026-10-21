@@ -31,6 +31,7 @@ var cfg struct {
 	UPnP           bool `json:"upnp"` // Ask the router to forward the ports (UPnP, NAT-PMP)
 	MDNS           bool `json:"mdns"` // Advertise the node on the local network, and look for others
 	p2pBlockInline bool
+	expectGenesis  string
 }
 
 // Initialises defaults, parses command line
@@ -65,6 +66,7 @@ func configInit() {
 	flag.BoolVar(&cfg.showHelp, "help", false, "Shows CLI usage information")
 	flag.BoolVar(&cfg.UPnP, "upnp", cfg.UPnP, "Ask the router to forward the ports to this computer (UPnP, NAT-PMP)")
 	flag.BoolVar(&cfg.MDNS, "mdns", cfg.MDNS, "Advertise the node on the local network, and look for other nodes there (mDNS)")
+	flag.StringVar(&cfg.expectGenesis, "expect-genesis", "", "For pull: the hash of the genesis block which the chain must have")
 	flag.BoolVar(&cfg.faster, "faster", false, "Be faster when starting up")
 	flag.BoolVar(&cfg.p2pBlockInline, "p2pblockinline", false, "Send blocks to peers inline instead of over HTTP")
 	flag.Parse()

@@ -57,12 +57,18 @@ var blockchainSubdirectory string
  *
  * Of these, only the Creator field is optional. By default, for new blocks, it is taken
  * from the "BlockCreator" field in the pubkey metadata (if it exists).
+ *
+ * The Timestamp field (RFC 3339) is required in all the blocks except for the genesis block, see consensus.go.
  */
 
 // Block is the working representation of a blockchain block
 type Block struct {
 	*DbBlockchainBlock
 	db *sql.DB
+
+	// Timestamp is the Timestamp from the block's _meta table. It's zero if the block doesn't have a valid one, in
+	// which case TimeAccepted is the modification time of the file, which is not good for anything but display.
+	Timestamp time.Time
 }
 
 // BlockKeyOp is the representation of a key op record from the blocks' _keys table.
@@ -225,6 +231,8 @@ func blockchainVerifyEverything() error {
 	keys := newKeySet()
 	previousHash := GenesisBlockPreviousBlockHash
 	totalScore := 0
+	var parentTime time.Time
+	var signers []string // The signers of all the blocks except for the genesis block
 	for height := 0; height <= maxHeight; height++ {
 		if height > 0 && height%1000 == 0 {
 			log.Println("Verifying block", height)
@@ -269,8 +277,16 @@ func blockchainVerifyEverything() error {
 		if height == genesisBlockHeight {
 			ops, err = verifyGenesisBlock(b, keys)
 		} else {
-			ops, err = validateBlock(b, height, keys)
+			// The time of the check isn't known here: only the order of the timestamps is checked
+			recent := signers[max(0, len(signers)-recentSignerWindow(keys)):]
+			ops, err = validateBlock(b, height, keys, blockContext{
+				genesisHash:   chainParams.GenesisBlockHash,
+				parentTime:    parentTime,
+				blockPeriod:   chainParams.blockPeriod(),
+				recentSigners: recent,
+			})
 		}
+		parentTime = b.Timestamp
 		b.Close()
 		if err != nil {
 			return fmt.Errorf("block %d: %v", height, err)
@@ -281,6 +297,9 @@ func blockchainVerifyEverything() error {
 		}
 		keys.apply(height, ops)
 		previousHash = dbb.Hash
+		if height > genesisBlockHeight {
+			signers = append(signers, dbb.SignaturePublicKeyHash)
+		}
 	}
 
 	// The table of keys is derived from the blocks, so it must agree with what the blocks say
@@ -419,7 +438,10 @@ func OpenBlockFile(fileName string) (*Block, error) {
 	if b.PreviousBlockHashSignature, err = b.dbGetMetaHexBytes("PreviousBlockHashSignature"); err != nil {
 		return nil, err
 	}
-	if b.TimeAccepted, err = b.dbGetMetaTime("Timestamp"); err != nil {
+	if b.Timestamp, err = b.dbGetMetaTime("Timestamp"); err == nil {
+		b.TimeAccepted = b.Timestamp
+	} else {
+		b.Timestamp = time.Time{}
 		st, err := os.Stat(fileName)
 		if err != nil {
 			return nil, err

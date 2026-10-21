@@ -13,7 +13,10 @@ Order of work: 1) P2P resource limits (#5–#8, #12, #13), 2) peer management an
 
 ## Cryptography and consensus
 
-- [ ] **#1 Key-op signatures don't say what they approve (high, confirmed).**
+- [x] **#1 Key-op signatures don't say what they approve (high, confirmed).**
+  *Done:* key ops above height 0 sign `sha256("daisy-keyop-v1" || 0 || genesis hash || op || key hash)`
+  (`dcrypto.KeyOpMessage`/`SignKeyOp`/`VerifyKeyOp`); the genesis block keeps the old format. Regression test:
+  `TestKeyOpSignaturesCantBeReplayed`.
   `dcrypto.SignPublicKeyHash` signs only `sha256(pubkey)`: not the operation ("A"/"R"), not the chain, not the
   height. The signatures that added a key are also valid signatures for revoking it, so any one signatory can copy
   the quorum's "A" signatures from the block that added key K into an "R" op in their own block and revoke K.
@@ -22,7 +25,10 @@ Order of work: 1) P2P resource limits (#5–#8, #12, #13), 2) peer management an
   Fix: sign a domain-separated message, e.g. `sha256("daisy-keyop" ‖ genesisHash ‖ op ‖ pubkeyHash)`. The genesis
   block keeps the old format.
 
-- [ ] **#2 Any signatory can win fork choice whenever they like (high).**
+- [x] **#2 Any signatory can win fork choice whenever they like (high).**
+  *Done:* a required hashed `Timestamp` (strictly later than the parent's by `block_period_seconds`, default 1; at most 15 s
+  ahead of the local clock) and the Clique "recently signed" rule (no signing within the previous `floor(N/2)` blocks of the
+  branch). Documented in `consensus.go` and the README; with N=2 both signatories must be online.
   Out-of-turn blocks score 1 and nothing limits how fast blocks are made (no timestamp rule, no "signed recently"
   rule as in Clique). One rogue signatory can sign hundreds of blocks in seconds and replace up to `maxReorgDepth`
   (128) blocks of honest history.
@@ -30,12 +36,16 @@ Order of work: 1) P2P resource limits (#5–#8, #12, #13), 2) peer management an
   plus a Clique-style limit (a signer may sign at most one of every ⌊N/2⌋+1 consecutive blocks) where it doesn't
   halt small chains.
 
-- [ ] **#3 Key ops can freeze for good (medium).**
+- [x] **#3 Key ops can freeze for good (medium).**
+  *Done:* the quorum is `min(QuorumForHeight(h), floor(active/2)+1)` (`EffectiveQuorum`); README and tests updated.
   `QuorumForHeight` jumps to 10 at height 149 and keeps growing. A chain with fewer active signatories than that can
   never add or revoke a key again. Cap the quorum by the number of active signatories (e.g. ⌊active/2⌋+1) and update
   the README table and its test.
 
-- [ ] **#4 Smaller crypto points (low).**
+- [x] **#4 Smaller crypto points (low).**
+  *Done:* P-256 only, strict `1:` + 32 byte key hashes, all signed/verified hashes must be 32 bytes, `SignBytes` makes
+  low-S signatures and low-S is required above height 0 (not for genesis), `daisy pull -expect-genesis <hash>` (also
+  `-expect-genesis` before `pull`) and a warning with the hash and creator key when it's absent.
   - `DecodePublicKeyBytes` accepts any ECDSA curve; require P-256.
   - `decodePublicKeyHash` doesn't check the `1:` type prefix or that the hash is 32 bytes. ECDSA truncates over-long
     hashes, so require exactly 32 bytes everywhere a hash is signed or verified.

@@ -152,8 +152,10 @@ func TestForkInTurnBlockWins(t *testing.T) {
 }
 
 // A branch of blocks which are out of turn can win, if it's long enough. And then lose again.
+// (There are three signatories, because with two of them nobody can sign two blocks in a row, which a branch of
+// out of turn blocks followed by one in turn needs.)
 func TestForkLongerBranchWins(t *testing.T) {
-	signers := []*testSigner{newTestSigner(t), newTestSigner(t)}
+	signers := []*testSigner{newTestSigner(t), newTestSigner(t), newTestSigner(t)}
 	tc := setupTestChain(t, signers...)
 	genesis := tc.genesis.hash
 
@@ -252,8 +254,8 @@ func TestReorganizationUndoesKeyOps(t *testing.T) {
 	prev := p2.hash
 	var last testBlock
 	for i := 3; i <= 7; i++ {
-		last = tc.newBlock(prev, tc.inTurn(prev), fmt.Sprint("p", i))
-		tc.accept(last)
+		last = tc.newBlock(prev, tc.next(prev), fmt.Sprint("p", i))
+		tc.mustAcceptAny(last)
 		prev = last.hash
 	}
 	if tc.tip().Hash != last.hash {

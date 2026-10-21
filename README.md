@@ -74,7 +74,11 @@ All the blocks in the blockchain can be queried at the same time by using a comm
 
 Since this is a private blockchain, not everyone has the ability to create new blocks. I'm thinking of this as a more of a framework for creating new single-purpose blockchain instances. If you want to contribute to the default blockchain (i.e. store data, i.e. add new sqlite databases to the blockchain), run the `./daisy mykeys` command, send me the public key hash to sign, and an explanation / introductory letter saying why and what do you want to do with it, and I'll sign your key and accept it into the blockchain as one of the signatories.
 
-When you have a private key whose public part is added to the list of signatories, running `./daisy signimportblock mydata.db` will import the mydata.db file into the blockchain. Before it's imported, the database is modified to contain the Daisy metadata tables.
+When you have a private key whose public part is added to the list of signatories, running `./daisy signimportblock mydata.db` will import the mydata.db file into the blockchain. Before it's imported, the database is modified to contain the Daisy metadata tables. A signatory can't sign two blocks too close together, see "Limiting how fast a branch can grow" below.
+
+## Replicating a chain with `daisy pull`
+
+`./daisy -dir <empty dir> pull http://host:2018/` fetches the chain parameters and the genesis block from a node. The node isn't authenticated (it's plain HTTP, and the chain parameters, with the genesis block hash and the creator's key, come from the same server), so whoever is in the middle can give you a different chain. Get the genesis block hash from somebody you trust and pass it: `./daisy -dir <dir> pull -expect-genesis <hash> http://host:2018/` (the flag can be given before `pull`, too). The pull is refused, before anything is written, if the hash is not the one. Without it `daisy` prints the hash and the creator's key with a warning.
 
 ## Finding peers, and NATs
 
@@ -106,9 +110,10 @@ Talks / presentations I gave about Daisy:
     * The validity of the SQLite files
     * The presence of a special tables named `_meta` and `_keys`,
     * The validity of the previous block hash in the `_meta` table
-    * The previous block hash is signed with a key which is one of the accepted private keys, i.e. signatories, i.e. which is present in the previous blocks' `_keys` table.
-    * The `_keys` table contains new signatory keys additions and revocations. Both operations must be signed by a number of currently valid signatories, where the
-      number is given as `1 if height < 149 else floor(log(height)*2)`
+    * The previous block hash is signed with a key which is one of the accepted private keys, i.e. signatories, i.e. which is present in the previous blocks' `_keys` table. The signatures must be in the canonical "low-S" form (`daisy` always makes them that way).
+    * The block has a `Timestamp` in its `_meta` table, which is later than the timestamp of the previous block by at least the block period, and not more than 15 seconds in the future, see "Limiting how fast a branch can grow" below.
+    * The signatory did not sign one of the last `floor(N/2)` blocks of the branch, where `N` is the number of valid signatories, see below.
+    * The `_keys` table contains new signatory keys additions and revocations. Both operations must be signed by a number of currently valid signatories, which is the *quorum* for the height of the block (see below).
     * The key operations must be signed by at least that number of *different* signatories who are valid at that point of the chain (a revoked key can't sign anything).
     * If there are competing branches, the branch with the highest total score wins, see "Signing turns and forks" below.
 * Flood-based p2p network: every node can request a list of known connections from the other nodes. A peer is only remembered and passed on after it has said a valid hello, peers which stop answering are forgotten, and there are limits on the numbers of connections and of known peers.
@@ -124,6 +129,15 @@ Any signatory may sign a block at any time, so two of them can extend the same b
 * A branch that forks off more than 128 blocks below the tip is ignored.
 
 Nobody is prevented from signing out of turn, so a signatory who is offline never blocks the others, but a block out of turn loses against a block in turn. With a single signatory every block scores 2 and the best chain is simply the longest one. `daisy signimportblock` tells whether the new block is in turn.
+
+### Limiting how fast a branch can grow
+
+The scores alone would let a single rogue signatory sign hundreds of blocks in a few seconds and replace up to 128 blocks of honest history with a "longer" branch. So there are two more rules, and a block which breaks them is invalid:
+
+* **Timestamps.** Every block except for the genesis block has a `Timestamp` (RFC 3339) in its `_meta` table, which is a part of the hashed file. It must be at least the *block period* later than the timestamp of the previous block (`block_period_seconds` in `chainparams.json`, one second if it isn't there), and not more than 15 seconds in the future by the clock of the node that checks it. A block without a timestamp is invalid (the modification time of the file doesn't count). So a branch can't grow faster than one block per period, and it can't run ahead of the wall clock. `daisy signimportblock` writes the timestamp (if the previous block is less than a block period old, the timestamp is made late enough). Keep the clocks of the signatories roughly right.
+* **Recently signed (like Clique).** With `N` valid signatories, a signatory may sign at most one of every `floor(N/2)+1` consecutive blocks of a branch: it can't sign if it has signed one of the previous `floor(N/2)` blocks of the same branch. A minority of the signatories therefore can't build a branch on its own. The genesis block doesn't count as signed by anyone. With one signatory there's no limit.
+
+The price is availability, and it is deliberate: with two signatories both have to be online, and they must alternate (neither can sign two blocks in a row); with three or four nobody can sign twice in a row, and so on. With few signatories the safety against a rogue one needs this; chains which can't live with it need to have more signatories.
 
 When another branch becomes the best chain, the blocks it replaces are kept as side branches (in the `sideblocks` table and the `blocks/side` directory) and can come back if their branch is extended. The signatory keys are rolled back and forward together with the blocks.
 
@@ -150,17 +164,26 @@ To be accepted as blocks, the SQLite database files have some soft and hard rest
 
 ### The `_keys` table
 
-This table contains key operations for block creators. Keys can be either accepted or revoked. It is invalid for a `_keys` table to contain both acceptance and revocation records for a single key. Both acceptance and revocation operations require a quorum, where Q different keys which are already accepted sign the hash of the key in question. The number Q is calculated as:
+This table contains key operations for block creators. Keys can be either accepted or revoked. It is invalid for a `_keys` table to contain both acceptance and revocation records for a single key. Both acceptance and revocation operations require a quorum, where Q different keys which are already accepted sign the operation on the key in question. The number Q is calculated as:
 
 ```
-  Q = 1 if H  < 149 else floor(log(H)*2)
+  Q = min( QuorumForHeight(H), floor(A/2) + 1 )
+  QuorumForHeight(H) = 1 if H < 149 else floor(log(H)*2)
 ```
 
-Where `H` is the block height of the block containing these records.
+Where `H` is the block height of the block containing these records, and `A` is the number of valid (not revoked) signatories before that block. The second term is there so that a chain with few signatories can still add and revoke keys: no more than a majority of them is ever needed, whatever the height. The table below is the first term.
+
+What is signed is not just the hash of the key, but a message that says what is being done and on which chain:
+
+```
+  signature = ECDSA-P256-SHA256-sign( sha256( "daisy-keyop-v1" || 0x00 || genesis_block_hash || op || key_hash ) )
+```
+
+where `genesis_block_hash` and `key_hash` are the raw 32 bytes of the hashes (without the `1:` prefix), and `op` is the single letter `A` (add) or `R` (revoke), the `op` column of the record. A signature that approved adding a key is therefore no good for revoking it, and a signature on one chain is no good on another one. The signatures must be low-S. The key operations in the *genesis block* (height 0) are the exception: they are signed in the old format (the signature of the key hash alone, any S), because the genesis block of the default chain was made that way and it can't change. The genesis block is pinned by its hash in the chain parameters, so that is the one and only genesis rule; `daisy newchain` uses it, too.
 
 For example, if `Q` is 3, to add a key `K` to the list of accepted keys, there must be exactly 3 records in the `_keys` table pertaining to `K`. Each of the records must contain a valid signature by a different, already accepted key. The key `K` can be then used to sign new blocks immediately after the block which contain this records has been accepted.
 
-A table of quorums required for specific block heights is:
+A table of the first term, `QuorumForHeight`, for specific block heights is:
 
 ```
   1   1
@@ -181,10 +204,10 @@ A table of quorums required for specific block heights is:
   162755 24
 ```
 
-E.g. for block 100000, 23 signatures are required to accept a new signature.
+E.g. for block 100000, 23 signatures are required to accept a new signature, if there are at least 45 signatories (with 3 signatories, 2 are enough).
 
 # Basic crypto
 
-ECDSA P-256 is used for public key crypto operations.
+ECDSA P-256 is used for public key crypto operations (public keys on other curves are not accepted). Signatures are ASN.1 DER encoded, are made over a 32 byte hash (nothing else is signed or verified), and `daisy` makes them low-S, so a third party can't change a valid signature into another valid one.
 
 Strings refered in Daisy as "public keys" are SHA256 hashes of public keys and begin with the string "1:" (the 1 is to indicate a key type, should it need to change in the future). They look like "1:9569f0894e3d2b435a4c49c6a97501f4191b9729ff53be5acee2c7bd4be0e439".

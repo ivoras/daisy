@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -42,12 +43,20 @@ type testKeyOp struct {
 	op      string
 	target  *testSigner
 	signers []*testSigner
+
+	// To make bad key ops: sign the operation signAs instead of op, or for the chain with the genesis block signGenesis
+	signAs      string
+	signGenesis string
+
+	// Records to copy into the block as they are, to replay the signatures of another block
+	copySignatures []BlockKeyOp
 }
 
 type testBlock struct {
 	file    string
 	hash    string
 	prev    string
+	ts      time.Time
 	sig     []byte // The signature of the block hash
 	prevSig []byte // The signature of the previous block hash
 }
@@ -58,6 +67,7 @@ type testChain struct {
 	signers map[string]*testSigner // By key hash
 	genesis testBlock
 	counter int
+	times   map[string]time.Time // The timestamps of the blocks, by hash
 }
 
 // setupTestChain creates a blockchain in a new data directory, with a genesis block which adds all the given signers.
@@ -65,7 +75,7 @@ type testChain struct {
 func setupTestChain(t *testing.T, genesisSigners ...*testSigner) *testChain {
 	t.Helper()
 	oldCfg, oldParams, oldSub := cfg, chainParams, blockchainSubdirectory
-	tc := &testChain{t: t, dir: t.TempDir(), signers: make(map[string]*testSigner)}
+	tc := &testChain{t: t, dir: t.TempDir(), signers: make(map[string]*testSigner), times: make(map[string]time.Time)}
 	cfg.DataDir = filepath.Join(tc.dir, "data")
 	cfg.faster = false
 	if err := os.Mkdir(cfg.DataDir, 0700); err != nil {
@@ -89,7 +99,8 @@ func setupTestChain(t *testing.T, genesisSigners ...*testSigner) *testChain {
 		tc.signers[s.hash] = s
 		ops = append(ops, testKeyOp{op: "A", target: s, signers: []*testSigner{genesisSigners[0]}})
 	}
-	tc.genesis = tc.newBlock(GenesisBlockPreviousBlockHash, genesisSigners[0], "genesis", ops...)
+	// The genesis block is a day old, so there's room for a lot of blocks which are a second apart
+	tc.genesis = tc.newBlockAt(GenesisBlockPreviousBlockHash, genesisSigners[0], "genesis", time.Now().Add(-24*time.Hour).Truncate(time.Second), ops...)
 	chainParams.GenesisBlockHash = tc.genesis.hash
 
 	if err := blockchainEnsureBlockDir(0); err != nil {
@@ -118,9 +129,19 @@ func setupTestChain(t *testing.T, genesisSigners ...*testSigner) *testChain {
 }
 
 // newBlock creates a signed block file with the given previous block. The extra text goes into the block, so
-// that blocks which are otherwise the same have different hashes.
+// that blocks which are otherwise the same have different hashes. The timestamp of the block is a second later than
+// the one of the previous block.
 func (tc *testChain) newBlock(prev string, signer *testSigner, extra string, ops ...testKeyOp) testBlock {
 	tc.t.Helper()
+	return tc.newBlockAt(prev, signer, extra, tc.times[prev].Add(time.Second), ops...)
+}
+
+// newBlockAt is newBlock() with the given timestamp. If it is zero, the block doesn't have one.
+func (tc *testChain) newBlockAt(prev string, signer *testSigner, extra string, ts time.Time, ops ...testKeyOp) testBlock {
+	tc.t.Helper()
+	if tc.times[prev].IsZero() && prev != GenesisBlockPreviousBlockHash {
+		ts = tc.genesisTime().Add(time.Second) // A made up parent, like in the tests of orphans
+	}
 	tc.signers[signer.hash] = signer
 	tc.counter++
 	file := filepath.Join(tc.dir, "incoming", fmt.Sprintf("block%d.db", tc.counter))
@@ -146,11 +167,30 @@ func (tc *testChain) newBlock(prev string, signer *testSigner, extra string, ops
 	must(dbSetMetaInt(db, "Version", CurrentBlockVersion))
 	must(dbSetMetaString(db, "PreviousBlockHash", prev))
 	must(dbSetMetaString(db, "PreviousBlockHashSignature", prevSig))
-	must(dbSetMetaString(db, "Timestamp", time.Now().Format(time.RFC3339)))
+	if !ts.IsZero() {
+		must(dbSetMetaString(db, "Timestamp", ts.Format(time.RFC3339)))
+	}
 	must(dbSetMetaString(db, "CreatorPublicKey", signer.hash))
 	for _, op := range ops {
+		for _, c := range op.copySignatures {
+			_, err = db.Exec("INSERT INTO _keys (op, pubkey_hash, pubkey, sigkey_hash, signature) VALUES (?, ?, ?, ?, ?)",
+				op.op, op.target.hash, hex.EncodeToString(op.target.pub), c.signatureKeyHash, hex.EncodeToString(c.signature))
+			must(err)
+		}
 		for _, s := range op.signers {
-			sig, err := dcrypto.SignPublicKeyHash(s.key, op.target.hash)
+			var sig []byte
+			if prev == GenesisBlockPreviousBlockHash {
+				sig, err = dcrypto.SignPublicKeyHash(s.key, op.target.hash) // The genesis block has the old format
+			} else {
+				signAs, signGenesis := op.op, tc.genesis.hash
+				if op.signAs != "" {
+					signAs = op.signAs
+				}
+				if op.signGenesis != "" {
+					signGenesis = op.signGenesis
+				}
+				sig, err = dcrypto.SignKeyOp(s.key, signGenesis, signAs, op.target.hash)
+			}
 			must(err)
 			_, err = db.Exec("INSERT INTO _keys (op, pubkey_hash, pubkey, sigkey_hash, signature) VALUES (?, ?, ?, ?, ?)",
 				op.op, op.target.hash, hex.EncodeToString(op.target.pub), s.hash, hex.EncodeToString(sig))
@@ -165,7 +205,12 @@ func (tc *testChain) newBlock(prev string, signer *testSigner, extra string, ops
 	must(err)
 	prevSigBytes, err := hex.DecodeString(prevSig)
 	must(err)
-	return testBlock{file: file, hash: hash, prev: prev, sig: sig, prevSig: prevSigBytes}
+	tc.times[hash] = ts
+	return testBlock{file: file, hash: hash, prev: prev, ts: ts, sig: sig, prevSig: prevSigBytes}
+}
+
+func (tc *testChain) genesisTime() time.Time {
+	return tc.times[tc.genesis.hash]
 }
 
 func (tc *testChain) accept(b testBlock) (acceptInfo, error) {
@@ -184,6 +229,16 @@ func (tc *testChain) mustAccept(b testBlock, want acceptResult) acceptInfo {
 	return info
 }
 
+// mustAcceptAny accepts the block, whatever happens to the best chain
+func (tc *testChain) mustAcceptAny(b testBlock) acceptInfo {
+	tc.t.Helper()
+	info, err := tc.accept(b)
+	if err != nil {
+		tc.t.Fatalf("block %s was refused: %v", b.hash, err)
+	}
+	return info
+}
+
 func (tc *testChain) mustRefuse(b testBlock) error {
 	tc.t.Helper()
 	info, err := tc.accept(b)
@@ -193,42 +248,64 @@ func (tc *testChain) mustRefuse(b testBlock) error {
 	return err
 }
 
-// inTurn returns the signatory whose turn it is to sign the block after the given one
-func (tc *testChain) inTurn(prev string) *testSigner {
+// branchState returns the signatory keys after the given block, and the signers who can't sign the block after it,
+// because they have signed too recently
+func (tc *testChain) branchState(prev string) (keys *keySet, recent []string, height int) {
 	tc.t.Helper()
 	dbb, onBestChain, err := dbGetAnyBlock(prev)
 	if err != nil {
 		tc.t.Fatal(err)
 	}
-	keys, _, _, err := keysAfterBlock(dbb, onBestChain)
+	keys, _, _, err = keysAfterBlock(dbb, onBestChain)
 	if err != nil {
 		tc.t.Fatal(err)
 	}
-	s := tc.signers[inTurnSigner(keys, dbb.Height+1)]
+	if recent, err = recentSignersOf(dbb, recentSignerWindow(keys)); err != nil {
+		tc.t.Fatal(err)
+	}
+	return keys, recent, dbb.Height + 1
+}
+
+// inTurn returns the signatory whose turn it is to sign the block after the given one. (It may not be allowed to,
+// if it has signed one of the previous blocks.)
+func (tc *testChain) inTurn(prev string) *testSigner {
+	tc.t.Helper()
+	keys, _, height := tc.branchState(prev)
+	s := tc.signers[inTurnSigner(keys, height)]
 	if s == nil {
 		tc.t.Fatal("don't know the signer in turn")
 	}
 	return s
 }
 
-// outOfTurn returns a signatory whose turn it is not to sign the block after the given one
+// outOfTurn returns a signatory who is allowed to sign the block after the given one, but whose turn it is not
 func (tc *testChain) outOfTurn(prev string) *testSigner {
 	tc.t.Helper()
-	dbb, onBestChain, err := dbGetAnyBlock(prev)
-	if err != nil {
-		tc.t.Fatal(err)
-	}
-	keys, _, _, err := keysAfterBlock(dbb, onBestChain)
-	if err != nil {
-		tc.t.Fatal(err)
-	}
-	inTurn := inTurnSigner(keys, dbb.Height+1)
+	keys, recent, height := tc.branchState(prev)
+	inTurn := inTurnSigner(keys, height)
 	for _, h := range keys.active() {
-		if h != inTurn {
+		if h != inTurn && !slices.Contains(recent, h) {
 			return tc.signers[h]
 		}
 	}
-	tc.t.Fatal("there is only one signatory")
+	tc.t.Fatal("there is no signatory out of turn who can sign")
+	return nil
+}
+
+// next returns the signatory in turn to sign the block after the given one, or if it can't, another one who can
+func (tc *testChain) next(prev string) *testSigner {
+	tc.t.Helper()
+	keys, recent, height := tc.branchState(prev)
+	inTurn := inTurnSigner(keys, height)
+	if !slices.Contains(recent, inTurn) {
+		return tc.signers[inTurn]
+	}
+	for _, h := range keys.active() {
+		if !slices.Contains(recent, h) {
+			return tc.signers[h]
+		}
+	}
+	tc.t.Fatal("nobody can sign")
 	return nil
 }
 
