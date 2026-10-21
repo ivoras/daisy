@@ -58,25 +58,28 @@ Order of work: 1) P2P resource limits (#5–#8, #12, #13), 2) peer management an
 
 ## P2P resource exhaustion
 
-- [ ] **#5 No read deadline anywhere (high).**
+- [x] **#5 No read deadline anywhere (high).**
   Nothing calls `SetReadDeadline`. A connection that never says hello, or goes quiet, stays open forever. Inbound
   slots (`p2pMaxInbound = 128`) aren't limited per IP, so one host can hold all of them with idle sockets.
   Fix: a hello deadline (~10–30 s), an idle deadline of a few minutes reset on each message, and a per-IP inbound
   cap (~4).
+  Done: 20 s hello deadline, 5 min idle deadline reset on every message (nodes `ping` every 30 s), at most 4 inbound connections per IP (`p2pMaxInboundPerHost`); protocol 3.
 
-- [ ] **#6 `getblockhashes` has no range limit (high).**
+- [x] **#6 `getblockhashes` has no range limit (high).**
   `handleGetBlockHashes` returns whatever `[min, max]` is asked for; repeated requests can fill the outbox (up to
   262,144 messages) and run the node out of memory. Honest sync breaks too: `handleSearchForBlocks` asks for
   `[tip-32, peerHeight]` in one message, and past ~850k blocks the reply exceeds the 64 MiB message limit and the
   receiver bans the honest peer. Fix: clamp the range on both sides (e.g. 2,000) and page through it.
+  Done: `p2pMaxBlockHashes` = 2000 enforced by the responder (`clampHashRange`) and the requester, which pages through the peer's chain (`syncState` in `p2psync.go`); tested by syncing 23 blocks in pages of 4.
 
-- [ ] **#7 `getblock` can use up file descriptors and memory (high).**
+- [x] **#7 `getblock` can use up file descriptors and memory (high).**
   Protocol 2: every request opens the block file at once (`newBlockSender`), so thousands of requests mean thousands
   of open files (EMFILE breaks SQLite and `accept()` too). Protocol 1 with inline blocks: each request builds up to
   ~43 MiB of base64 in memory before queuing it. Fix: cap outstanding senders per connection (2–4), open the file
   on the first `nextMessage`, drop duplicate requests for a block already queued.
+  Done: 2 active senders per connection, extra requests wait as hashes (max 4096), duplicates and unknown blocks are dropped, the file is opened on the first `nextMessage` (a vanished file ends the transfer); the inline/http encodings are removed.
 
-- [ ] **#8 Unsigned blocks are downloaded in full, parsed by SQLite, and only then checked (high).**
+- [x] **#8 Unsigned blocks are downloaded in full, parsed by SQLite, and only then checked (high).**
   The `block` message carries `hash` and `hash_signature`; verifying the signature against the active keys is cheap
   and could happen before anything is downloaded or reserved. Today an attacker can push 1 GiB transfers unasked
   (two connections × two transfers fill the global 4 GiB `p2pIncomingBytes` budget, and a chunk every 2 minutes
@@ -84,6 +87,7 @@ Order of work: 1) P2P resource limits (#5–#8, #12, #13), 2) peer management an
   file while holding the global `chainLock`, and fill the 16-slot orphan pool with unsigned junk.
   Fix: check the announced signature against the active keys first; only accept transfers for blocks we asked for
   or count the budget per host; check the received file's hash equals the announced one before `acceptBlock`.
+  Done: a `block` is only received if we asked for it or its signature verifies against any key in `pubkeys`; per-host (1 GiB) and global (4 GiB) accounting; the received file is hashed against the announced hash before `acceptBlock`.
 
 - [ ] **#9 SQLite opens untrusted files without hardening (medium).**
   `dbOpen(..., true)` is only `mode=ro`. A crafted block can make `_meta` or `_keys` a view running expensive
@@ -105,14 +109,16 @@ Order of work: 1) P2P resource limits (#5–#8, #12, #13), 2) peer management an
   stay forever. Fix: take `observed_host` only from outbound, handshaken peers; one vote per peer host overall;
   expire entries; don't use it in `isSelf` for dialing.
 
-- [ ] **#12 Repeated hellos are processed every time (low).**
+- [x] **#12 Repeated hellos are processed every time (low).**
   Each hello re-submits `my_peers`, adds observation votes and can change the claimed protocol. Process only the
   first hello.
+  Done: `handleMsgHello` processes only the first hello of a connection.
 
-- [ ] **#13 Fake block hashes cost us requests (low).**
+- [x] **#13 Fake block hashes cost us requests (low).**
   `handleBlockHashes` requests every unknown hash: a 64 MiB map of fake hashes queues ~900k `getblock` messages, and
   the 5 s expiry of `recentlyRequestedBlocks` repeats it every 5 s. Cap the entries handled per message and only
   accept heights near the range we asked for.
+  Done: at most `p2pMaxBlockHashes` entries are handled per `blockhashes`, heights must be in the range last asked for or within [tip-128, tip+2000], non-hash values are ignored; hashes far above the tip start a paged search.
 
 - [ ] **#14 A single signatory can still add keys on a young chain (high).**
   Found when reviewing the fix for #2. `EffectiveQuorum` is `min(QuorumForHeight(h), ⌊N/2⌋+1)`, and
