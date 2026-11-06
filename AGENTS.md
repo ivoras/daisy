@@ -54,7 +54,6 @@ internal/daisy/       the node: config, CLI actions, blockchain rules, system DB
   cliactions.go       the commands (newchain, signimportblock, pull, query, mykeys); config.go: flags and config file
 internal/dcrypto/     stateless crypto: ECDSA P-256 sign/verify, "1:<sha256>" public key hash format
 internal/util/        generic helpers (hashing, StrIfMap JSON accessors, StringSetWithExpiry, mutex helper)
-internal/mining/      unused proof-of-work primitives
 internal/assets/      go:embed'ed genesis block of the default chain (genesis.db)
 docs/                 PROTOCOL.md (the p2p protocol), LINKS.md
 ```
@@ -199,5 +198,3 @@ These were found in a review and are tracked here so they aren't mistaken for in
   dropped as a duplicate.
 - `daisy pull` puts the server's host in the address book with the default p2p port, which is wrong when the node uses
   another one (harmless: the address fails and is forgotten).
-- `mining.CountStartZeroBits` counts zero bits across all bytes rather than only leading ones (the PoW
-  code is unused).

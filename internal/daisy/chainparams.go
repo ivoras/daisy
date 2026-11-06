@@ -1,11 +1,12 @@
 package daisy
 
-import "time"
-
-const (
-	ChainConsensusPoA = 0
-	ChainConsensusPoW = 1
+import (
+	"fmt"
+	"time"
 )
+
+// ChainConsensusPoA is the only consensus type: proof of authority
+const ChainConsensusPoA = "PoA"
 
 // The minimum difference between the timestamps of consecutive blocks, if the chain doesn't say otherwise
 const defaultBlockPeriodSeconds = 1
@@ -16,6 +17,14 @@ func (cp *ChainParams) blockPeriod() time.Duration {
 		return defaultBlockPeriodSeconds * time.Second
 	}
 	return time.Duration(cp.BlockPeriodSeconds) * time.Second
+}
+
+// checkConsensusType returns an error if the chain asks for a consensus other than proof of authority
+func (cp *ChainParams) checkConsensusType() error {
+	if cp.ConsensusType != "" && cp.ConsensusType != ChainConsensusPoA {
+		return fmt.Errorf("unsupported consensus_type %q, only %q is supported", cp.ConsensusType, ChainConsensusPoA)
+	}
+	return nil
 }
 
 // ChainParams holds blockchain configuration
@@ -44,9 +53,8 @@ type ChainParams struct {
 	// The minimum number of seconds between the timestamps of two consecutive blocks. One if not set.
 	BlockPeriodSeconds int `json:"block_period_seconds"`
 
-	// Consensus algorithm used: "PoA", "PoW"
-	ConsensusTypeString string `json:"consensus_type"`
-	ConsensusType       int    `json:"-"`
+	// Consensus algorithm used: only "PoA" (or empty, which means the same)
+	ConsensusType string `json:"consensus_type"`
 
 	// Description of the blockchain (e.g. its purpose)
 	Description string `json:"description"`

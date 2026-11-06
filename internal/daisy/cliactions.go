@@ -261,6 +261,10 @@ func actionNewChain(jsonFilename string) {
 	if err != nil {
 		log.Fatalln(err)
 	}
+	if err = ncp.checkConsensusType(); err != nil {
+		log.Fatalln(err)
+	}
+	ncp.ConsensusType = ChainConsensusPoA
 	if ncp.BlockPeriodSeconds < 0 {
 		log.Fatalln("block_period_seconds must not be negative")
 	}
@@ -520,6 +524,9 @@ func actionPull(baseURL, expectGenesis string) {
 	}
 	if chainParams.GenesisBlockHash == "" || chainParams.GenesisBlockHashSignature == "" {
 		log.Fatalln("Incomplete chainparams data", cpURL)
+	}
+	if err = chainParams.checkConsensusType(); err != nil {
+		log.Fatalln("Error in chainparams", cpURL, err)
 	}
 
 	if expectGenesis != "" {

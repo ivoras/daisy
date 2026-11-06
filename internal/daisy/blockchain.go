@@ -205,6 +205,9 @@ func blockchainInit(createDefault bool) {
 			if err != nil {
 				log.Fatal("Error decoding chainparams file", cpFilename, err)
 			}
+			if err = chainParams.checkConsensusType(); err != nil {
+				log.Fatal("Error in chainparams file ", cpFilename, ": ", err)
+			}
 			for _, peer := range chainParams.BootstrapPeers {
 				abAddBootstrap(peer)
 			}
