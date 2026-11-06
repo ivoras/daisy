@@ -201,4 +201,3 @@ These were found in a review and are tracked here so they aren't mistaken for in
   another one (harmless: the address fails and is forgotten).
 - `mining.CountStartZeroBits` counts zero bits across all bytes rather than only leading ones (the PoW
   code is unused).
-- `cfg.httpPort` is unexported, so `http_port` in the JSON config file is silently ignored.

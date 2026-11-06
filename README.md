@@ -80,6 +80,11 @@ When you have a private key whose public part is added to the list of signatorie
 
 `./daisy -dir <empty dir> pull http://host:2018/` fetches the chain parameters and the genesis block from a node. The node isn't authenticated (it's plain HTTP, and the chain parameters, with the genesis block hash and the creator's key, come from the same server), so whoever is in the middle can give you a different chain. Get the genesis block hash from somebody you trust and pass it: `./daisy -dir <dir> pull -expect-genesis <hash> http://host:2018/` (the flag can be given before `pull`, too). The pull is refused, before anything is written, if the hash is not the one. Without it `daisy` prints the hash and the creator's key with a warning.
 
+## Configuration file
+
+`./daisy -conf config.json ...` reads the settings from a JSON file before the command-line flags, which override it:
+`{"p2p_port": 2017, "http_port": 2018, "data_dir": "/var/lib/daisy", "upnp": false, "mdns": false}`. All fields are optional.
+
 ## Finding peers, and NATs
 
 * `-upnp`: ask the router to forward the ports with UPnP or NAT-PMP (it can be set as `"upnp": true` in the configuration file too).

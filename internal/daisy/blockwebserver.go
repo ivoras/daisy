@@ -130,7 +130,7 @@ func blockWebServer() {
 	mux.HandleFunc("GET /status", blockWebSendStatus)
 
 	server := &http.Server{
-		Addr:              fmt.Sprintf(":%d", cfg.httpPort),
+		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}

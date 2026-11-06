@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 )
 
 // DefaultP2PPort is the default TCP port for p2p connections
@@ -25,7 +26,7 @@ var cfg struct {
 	configFile    string
 	P2pPort       int    `json:"p2p_port"`
 	DataDir       string `json:"data_dir"`
-	httpPort      int
+	HTTPPort      int    `json:"http_port"`
 	showHelp      bool
 	faster        bool
 	UPnP          bool `json:"upnp"` // Ask the router to forward the ports (UPnP, NAT-PMP)
@@ -43,15 +44,17 @@ func configInit() {
 
 	// Init defaults
 	cfg.P2pPort = DefaultP2PPort
-	cfg.httpPort = DefaultBlockWebServerPort
+	cfg.HTTPPort = DefaultBlockWebServerPort
 
 	// Config file is parsed first
-	for i, arg := range os.Args {
+	for i, arg := range os.Args[1:] {
 		if arg == "-conf" || arg == "--conf" {
-			if i+1 >= len(os.Args) {
+			if i+2 >= len(os.Args) {
 				log.Fatal("-conf requires filename argument")
 			}
-			cfg.configFile = os.Args[i+1]
+			cfg.configFile = os.Args[i+2]
+		} else if name, value, ok := strings.Cut(arg, "="); ok && (name == "-conf" || name == "--conf") {
+			cfg.configFile = value
 		}
 	}
 	if cfg.configFile != "" {
@@ -59,8 +62,9 @@ func configInit() {
 	}
 
 	// Then override the configuration with command-line flags
+	flag.StringVar(&cfg.configFile, "conf", cfg.configFile, "JSON configuration file, read before the other flags")
 	flag.IntVar(&cfg.P2pPort, "port", cfg.P2pPort, "P2P port")
-	flag.IntVar(&cfg.httpPort, "http-port", cfg.httpPort, "HTTP port")
+	flag.IntVar(&cfg.HTTPPort, "http-port", cfg.HTTPPort, "HTTP port")
 	flag.StringVar(&cfg.DataDir, "dir", cfg.DataDir, "Data directory")
 	flag.BoolVar(&cfg.showHelp, "help", false, "Shows CLI usage information")
 	flag.BoolVar(&cfg.UPnP, "upnp", cfg.UPnP, "Ask the router to forward the ports to this computer (UPnP, NAT-PMP)")
@@ -82,7 +86,10 @@ func configInit() {
 		}
 	}
 	if cfg.P2pPort < 1 || cfg.P2pPort > 65535 {
-		log.Fatal("Invalid TCP port", cfg.P2pPort)
+		log.Fatal("Invalid TCP port ", cfg.P2pPort)
+	}
+	if cfg.HTTPPort < 1 || cfg.HTTPPort > 65535 {
+		log.Fatal("Invalid HTTP port ", cfg.HTTPPort)
 	}
 }
 

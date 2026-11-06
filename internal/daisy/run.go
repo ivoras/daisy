@@ -41,7 +41,7 @@ func Main() {
 	go p2pClient()
 	go blockWebServer()
 	if cfg.UPnP {
-		natMapper = newNATManager(map[int]string{cfg.P2pPort: "Daisy P2P", cfg.httpPort: "Daisy blocks"})
+		natMapper = newNATManager(map[int]string{cfg.P2pPort: "Daisy P2P", cfg.HTTPPort: "Daisy blocks"})
 		natMapper.start()
 	}
 	if cfg.MDNS {
